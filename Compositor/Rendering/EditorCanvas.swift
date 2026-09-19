@@ -509,12 +509,14 @@ final class CanvasView: NSView {
             let editor = CanvasInlineTextView(session: session, canvasView: self, layerID: editingID)
             addSubview(editor)
             inlineEditor = editor
+            updateInlineEditorGeometry()
             editor.updateStylesAndText()
             let isNew = session.textEditIsNewLayer
-            if isNew || editor.string.isEmpty {
+            let strLen = (editor.string as NSString).length
+            if isNew || strLen == 0 {
                 editor.setSelectedRange(NSRange(location: 0, length: 0))
             } else {
-                editor.setSelectedRange(NSRange(location: editor.string.count, length: 0))
+                editor.setSelectedRange(NSRange(location: strLen, length: 0))
             }
             DispatchQueue.main.async { [weak self, weak editor] in
                 guard let self, let editor, let window = self.window else { return }
@@ -522,10 +524,9 @@ final class CanvasView: NSView {
             }
             needsDisplay = true
         } else {
+            updateInlineEditorGeometry()
             inlineEditor?.updateStylesAndText()
         }
-
-        updateInlineEditorGeometry()
     }
 
     func updateInlineEditorGeometry() {
@@ -1948,20 +1949,41 @@ final class CanvasInlineTextView: NSTextView, NSTextViewDelegate {
         guard let session, let layer = session.document?.layers.first(where: { $0.id == layerID }), let text = layer.liveText else { return }
         isSyncing = true
         let style = text.style
-        if self.string != style.text {
-            self.string = style.text
-        }
         let scale = session.viewport.pointsPerPixel
-        let fontSize = max(8, style.fontSize * scale)
-        let font = FontHelper.font(family: style.fontFamily, style: style.fontStyle, size: fontSize)
-        self.font = font
-        let textColor = NSColor(srgbRed: style.red, green: style.green, blue: style.blue, alpha: 1.0)
-        self.textColor = textColor
-        self.insertionPointColor = textColor
-        self.alignment = style.alignment.nsTextAlignment
         let padX = 8.0 * scale
         let padY = 8.0 * scale
         self.textContainerInset = NSSize(width: padX, height: padY)
+
+        let effectiveFontSize = max(1, style.fontSize * scale)
+        let font = FontHelper.font(family: style.fontFamily, style: style.fontStyle, size: effectiveFontSize)
+        let textColor = NSColor(srgbRed: style.red, green: style.green, blue: style.blue, alpha: 1.0)
+        self.font = font
+        self.textColor = textColor
+        self.insertionPointColor = textColor
+        self.alignment = style.alignment.nsTextAlignment
+
+        var typingAttrs: [NSAttributedString.Key: Any] = [:]
+        typingAttrs[.font] = font
+        typingAttrs[.foregroundColor] = textColor
+        let para = NSMutableParagraphStyle()
+        para.alignment = style.alignment.nsTextAlignment
+        if let leading = style.leading, leading > 0 {
+            let scaledLeading = leading * scale
+            para.minimumLineHeight = scaledLeading
+            para.maximumLineHeight = scaledLeading
+            para.lineSpacing = 0
+        }
+        typingAttrs[.paragraphStyle] = para
+        if style.tracking != 0 {
+            typingAttrs[.kern] = (style.tracking * effectiveFontSize) / 1000.0
+        }
+        self.typingAttributes = typingAttrs
+
+        let attrString = style.makeAttributedString(scale: scale, overrideText: style.text)
+        self.textStorage?.setAttributedString(attrString)
+
+        self.layoutManager?.invalidateLayout(forCharacterRange: NSRange(location: 0, length: (self.string as NSString).length), actualCharacterRange: nil)
+        self.needsDisplay = true
         isSyncing = false
     }
 
@@ -1971,6 +1993,7 @@ final class CanvasInlineTextView: NSTextView, NSTextViewDelegate {
         session.textContent = newString
         session.updateActiveText(registerUndo: false) { $0.text = newString }
         canvasView?.updateInlineEditorGeometry()
+        self.needsDisplay = true
     }
 
     override func keyDown(with event: NSEvent) {

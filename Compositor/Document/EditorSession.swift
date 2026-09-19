@@ -212,7 +212,7 @@ final class EditorSession {
     /// The shape being dragged out with the Shape tool, before it becomes a layer.
     var shapeDraft: ShapeDraft?
     /// Type tool settings
-    var textContent: String = "Sample Text"
+    var textContent: String = ""
     var textFontFamily: String = "Helvetica Neue"
     var textFontStyle: String = "Regular"
     var textFontSize: CGFloat = 36

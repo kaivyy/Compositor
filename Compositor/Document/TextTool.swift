@@ -29,7 +29,7 @@ nonisolated enum LayerTextAlignment: String, CaseIterable, Codable, Sendable {
 
 /// What a text layer draws, kept so the text can be edited and re-rendered with new styles.
 nonisolated struct LayerTextStyle: Codable, Equatable, Sendable {
-    var text: String = "Sample Text"
+    var text: String = ""
     var fontFamily: String = "Helvetica Neue"
     var fontStyle: String = "Regular"
     var fontSize: CGFloat = 36
@@ -66,24 +66,26 @@ nonisolated struct LayerTextStyle: Codable, Equatable, Sendable {
         PaletteColor(red: red, green: green, blue: blue)
     }
 
-    func makeAttributedString() -> NSAttributedString {
-        var baseFont = FontHelper.font(family: fontFamily, style: fontStyle, size: fontSize)
+    func makeAttributedString(scale: CGFloat = 1.0, overrideText: String? = nil) -> NSAttributedString {
+        let textToUse = overrideText ?? text
+        let effectiveFontSize = max(1, fontSize * scale)
+        var baseFont = FontHelper.font(family: fontFamily, style: fontStyle, size: effectiveFontSize)
 
         var traits: NSFontDescriptor.SymbolicTraits = []
         if isFauxBold { traits.insert(.bold) }
         if isFauxItalic { traits.insert(.italic) }
         if !traits.isEmpty {
             let descriptor = baseFont.fontDescriptor.withSymbolicTraits(traits)
-            baseFont = NSFont(descriptor: descriptor, size: fontSize) ?? baseFont
+            baseFont = NSFont(descriptor: descriptor, size: effectiveFontSize) ?? baseFont
         }
 
-        var effectiveSize = fontSize
+        var effectiveSize = effectiveFontSize
         if isSuperscript || isSubscript {
-            effectiveSize = max(4, fontSize * 0.65)
+            effectiveSize = max(4, effectiveFontSize * 0.65)
             baseFont = NSFont(descriptor: baseFont.fontDescriptor, size: effectiveSize) ?? baseFont
         }
 
-        var renderedString = text.isEmpty ? " " : text
+        var renderedString = textToUse
         if isAllCaps {
             renderedString = renderedString.uppercased()
         }
@@ -93,7 +95,7 @@ nonisolated struct LayerTextStyle: Codable, Equatable, Sendable {
         attributes[.foregroundColor] = NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
 
         if tracking != 0 {
-            attributes[.kern] = (tracking * fontSize) / 1000.0
+            attributes[.kern] = (tracking * effectiveFontSize) / 1000.0
         }
 
         if isUnderline {
@@ -103,11 +105,11 @@ nonisolated struct LayerTextStyle: Codable, Equatable, Sendable {
             attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
         }
 
-        var totalBaselineShift = baselineShift
+        var totalBaselineShift = baselineShift * scale
         if isSuperscript {
-            totalBaselineShift += fontSize * 0.35
+            totalBaselineShift += effectiveFontSize * 0.35
         } else if isSubscript {
-            totalBaselineShift -= fontSize * 0.15
+            totalBaselineShift -= effectiveFontSize * 0.15
         }
         if totalBaselineShift != 0 {
             attributes[.baselineOffset] = totalBaselineShift
@@ -116,8 +118,9 @@ nonisolated struct LayerTextStyle: Codable, Equatable, Sendable {
         let para = NSMutableParagraphStyle()
         para.alignment = alignment.nsTextAlignment
         if let leading = leading, leading > 0 {
-            para.minimumLineHeight = leading
-            para.maximumLineHeight = leading
+            let scaledLeading = leading * scale
+            para.minimumLineHeight = scaledLeading
+            para.maximumLineHeight = scaledLeading
             para.lineSpacing = 0
         }
         attributes[.paragraphStyle] = para
@@ -320,12 +323,21 @@ extension EditorSession {
         let trimmed = textContent.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty && textEditIsNewLayer {
             deleteLayer(editingID)
-        } else if initialEditingText != textContent {
-            beginEdit("Type Edit")
-            endEdit()
+        } else {
+            if let index = document?.layers.firstIndex(where: { $0.id == editingID }) {
+                let currentName = document?.layers[index].name ?? ""
+                if (currentName.hasPrefix("Text ") || textEditIsNewLayer) && !trimmed.isEmpty {
+                    document?.layers[index].name = String(trimmed.prefix(24))
+                }
+            }
+            if initialEditingText != textContent {
+                beginEdit("Type Edit")
+                endEdit()
+            }
         }
         initialEditingText = nil
         textEditIsNewLayer = false
+        textContent = ""
     }
 
     /// Cancels inline text editing, restoring previous text or removing the layer if it was freshly created.
@@ -337,10 +349,10 @@ extension EditorSession {
             deleteLayer(editingID)
         } else if let initial = initialEditingText {
             updateActiveText(registerUndo: false) { $0.text = initial }
-            textContent = initial
         }
         initialEditingText = nil
         textEditIsNewLayer = false
+        textContent = ""
     }
 
     /// Ends inline text editing, committing by default or cancelling if requested.
