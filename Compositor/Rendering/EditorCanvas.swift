@@ -851,6 +851,9 @@ final class CanvasView: NSView {
                 TiledLayerRenderer.drawRaster(raster, transform: transform, center: center(transform.center), scale: scale,
                     opacity: layer.opacity, blendMode: blendMode(of: layer),
                     mask: mask, in: context)
+            } else if stroke == nil, let liveText = layer.liveText, session.filterEdit?.previewImage(for: layer.id) == nil && session.levels?.previewImage(for: layer.id) == nil && session.hueSaturation?.previewImage(for: layer.id) == nil {
+                LayerRenderer.drawText(liveText, transform: transform, center: center(transform.center), scale: scale,
+                    opacity: layer.opacity, blendMode: blendMode(of: layer), mask: mask, in: context)
             } else if let image = session.filterEdit?.previewImage(for: layer.id) ?? session.levels?.previewImage(for: layer.id) ?? session.hueSaturation?.previewImage(for: layer.id) ?? layer.asset?.image {
                 // LayerRenderer picks a sharp reduction for the image and its mask itself.
                 LayerRenderer.draw(image, transform: transform,

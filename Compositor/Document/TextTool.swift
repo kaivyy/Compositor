@@ -210,13 +210,13 @@ extension EditorSession {
             return (image, CGSize(width: CGFloat(defaultW), height: CGFloat(defaultH)))
         }
 
-        let bounds = attrString.boundingRect(with: CGSize(width: 10_000, height: 10_000),
-                                             options: [.usesLineFragmentOrigin, .usesFontLeading])
-
         let padX: CGFloat = 8.0
         let padY: CGFloat = 8.0
-        let rawW = ceil(bounds.width) + padX * 2
-        let rawH = ceil(bounds.height) + padY * 2
+        let bounds = attrString.boundingRect(with: CGSize(width: 10_000, height: 10_000), options: [.usesLineFragmentOrigin, .usesFontLeading])
+        let textW = ceil(bounds.width)
+        let textH = ceil(bounds.height)
+        let rawW = textW + padX * 2
+        let rawH = textH + padY * 2
 
         let scaledW = max(1, Int(ceil(rawW * hScale)))
         let scaledH = max(1, Int(ceil(rawH * vScale)))
@@ -248,7 +248,7 @@ extension EditorSession {
 
         let originX = ((padX - bounds.minX) / hScale).rounded()
         let originY = ((padY - bounds.minY) / vScale).rounded()
-        let drawRect = CGRect(x: originX, y: originY, width: ceil(bounds.width) + 4, height: ceil(bounds.height) + 4)
+        let drawRect = CGRect(x: originX, y: originY, width: textW + 4, height: textH + 4)
         attrString.draw(with: drawRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
 
         context.restoreGState()

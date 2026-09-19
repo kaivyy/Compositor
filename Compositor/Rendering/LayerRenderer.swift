@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 
 /// Draws into a top-left coordinate system, shared by the canvas and export.
@@ -22,6 +23,59 @@ nonisolated enum LayerRenderer {
         let bounds = CGRect(x: -width / 2, y: -height / 2, width: width, height: height)
         if let clip { context.clip(to: coverage(of: clip, in: bounds), mask: clip.image) }
         context.draw(source.image, in: coverage(of: source, in: bounds))
+        context.restoreGState()
+    }
+
+    /// Draws crisp vector text directly at the current canvas scale.
+    static func drawText(_ text: LayerText, transform: LayerTransform, center: CGPoint,
+                         scale: CGFloat = 1, opacity: Double = 1, blendMode: LayerBlendMode = .normal,
+                         mask: CGImage? = nil, in context: CGContext) {
+        let width = transform.size.width * scale
+        let height = transform.size.height * scale
+        let device = deviceScale(of: context)
+        let clip = mask.map { reduced($0, width: width, device: device, sampling: transform.sampling) }
+
+        context.saveGState()
+        context.setAlpha(opacity)
+        context.setBlendMode(blendMode.cgMode)
+        context.setAllowsAntialiasing(true)
+        context.setShouldAntialias(true)
+        context.setAllowsFontSmoothing(true)
+        context.setShouldSmoothFonts(true)
+        context.setAllowsFontSubpixelPositioning(true)
+        context.setShouldSubpixelPositionFonts(true)
+        context.setAllowsFontSubpixelQuantization(true)
+        context.setShouldSubpixelQuantizeFonts(true)
+
+        context.translateBy(x: center.x, y: center.y)
+        context.rotate(by: transform.radians)
+        context.scaleBy(x: transform.flipX ? -1 : 1, y: transform.flipY ? -1 : 1)
+        let bounds = CGRect(x: -width / 2, y: -height / 2, width: width, height: height)
+        if let clip { context.clip(to: coverage(of: clip, in: bounds), mask: clip.image) }
+
+        let style = text.style
+        let attrString = style.makeAttributedString(scale: scale)
+        let padX = 8.0 * scale
+        let padY = 8.0 * scale
+        let drawRect = CGRect(x: bounds.minX + padX, y: bounds.minY + padY, width: max(0, width - padX * 2), height: max(0, height - padY * 2))
+
+        NSGraphicsContext.saveGraphicsState()
+        let nsContext = NSGraphicsContext(cgContext: context, flipped: true)
+        nsContext.shouldAntialias = true
+        nsContext.imageInterpolation = .high
+        NSGraphicsContext.current = nsContext
+
+        context.saveGState()
+        let hScale = max(0.1, style.horizontalScale / 100.0)
+        let vScale = max(0.1, style.verticalScale / 100.0)
+        context.scaleBy(x: hScale, y: vScale)
+
+        attrString.draw(with: CGRect(x: drawRect.minX / hScale, y: drawRect.minY / vScale, width: drawRect.width / hScale, height: drawRect.height / vScale),
+                        options: [.usesLineFragmentOrigin, .usesFontLeading])
+
+        context.restoreGState()
+        NSGraphicsContext.restoreGraphicsState()
+
         context.restoreGState()
     }
 
