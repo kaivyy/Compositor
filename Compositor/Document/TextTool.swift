@@ -227,14 +227,28 @@ extension EditorSession {
 
         let context = try BrushRaster.context(width: scaledW, height: scaledH, mask: false)
 
+        context.setAllowsAntialiasing(true)
+        context.setShouldAntialias(true)
+        context.setAllowsFontSmoothing(true)
+        context.setShouldSmoothFonts(true)
+        context.setAllowsFontSubpixelPositioning(true)
+        context.setShouldSubpixelPositionFonts(true)
+        context.setAllowsFontSubpixelQuantization(true)
+        context.setShouldSubpixelQuantizeFonts(true)
+        context.interpolationQuality = .high
+
         NSGraphicsContext.saveGraphicsState()
         let nsContext = NSGraphicsContext(cgContext: context, flipped: true)
+        nsContext.imageInterpolation = .high
+        nsContext.shouldAntialias = true
         NSGraphicsContext.current = nsContext
 
         context.saveGState()
         context.scaleBy(x: hScale, y: vScale)
 
-        let drawRect = CGRect(x: (padX - bounds.minX) / hScale, y: (padY - bounds.minY) / vScale, width: ceil(bounds.width), height: ceil(bounds.height))
+        let originX = ((padX - bounds.minX) / hScale).rounded()
+        let originY = ((padY - bounds.minY) / vScale).rounded()
+        let drawRect = CGRect(x: originX, y: originY, width: ceil(bounds.width) + 4, height: ceil(bounds.height) + 4)
         attrString.draw(with: drawRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
 
         context.restoreGState()

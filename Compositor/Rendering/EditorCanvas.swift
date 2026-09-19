@@ -525,7 +525,6 @@ final class CanvasView: NSView {
             needsDisplay = true
         } else {
             updateInlineEditorGeometry()
-            inlineEditor?.updateStylesAndText()
         }
     }
 
@@ -1979,10 +1978,16 @@ final class CanvasInlineTextView: NSTextView, NSTextViewDelegate {
         }
         self.typingAttributes = typingAttrs
 
+        let currentSelection = self.selectedRange()
         let attrString = style.makeAttributedString(scale: scale, overrideText: style.text)
         self.textStorage?.setAttributedString(attrString)
 
-        self.layoutManager?.invalidateLayout(forCharacterRange: NSRange(location: 0, length: (self.string as NSString).length), actualCharacterRange: nil)
+        let strLen = (self.string as NSString).length
+        let loc = min(currentSelection.location, strLen)
+        let len = min(currentSelection.length, strLen - loc)
+        self.setSelectedRange(NSRange(location: loc, length: len))
+
+        self.layoutManager?.invalidateLayout(forCharacterRange: NSRange(location: 0, length: strLen), actualCharacterRange: nil)
         self.needsDisplay = true
         isSyncing = false
     }
