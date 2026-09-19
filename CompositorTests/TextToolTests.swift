@@ -133,11 +133,10 @@ import AppKit
     @Test func addTextLayerCreatesLayerAndRegistersUndo() throws {
         let session = EditorSession()
         session.createDocument(width: 800, height: 600)
-        session.textContent = "New Heading"
         session.textFontSize = 48
 
         #expect(session.document?.layers.count == 0)
-        session.addTextLayer(at: CGPoint(x: 100, y: 150))
+        session.addTextLayer(at: CGPoint(x: 100, y: 150), content: "New Heading")
 
         #expect(session.document?.layers.count == 1)
         let layer = try #require(session.document?.layers.first)
@@ -179,9 +178,8 @@ import AppKit
     @Test func textLayerProjectPersistence() throws {
         let session = EditorSession()
         session.createDocument(width: 600, height: 400)
-        session.textContent = "Persistent Title"
         session.textFontSize = 40
-        session.addTextLayer(at: CGPoint(x: 20, y: 30))
+        session.addTextLayer(at: CGPoint(x: 20, y: 30), content: "Persistent Title")
 
         let snapshot = try #require(session.projectSnapshot())
         let record = try #require(snapshot.manifest.layers.first)
@@ -259,18 +257,21 @@ import AppKit
         session.addTextLayer(at: CGPoint(x: 50, y: 50))
         let first = try #require(session.activeLayer)
         #expect(first.liveText?.style.text == "")
+        #expect(session.isEditingText)
 
-        // Type something and commit
-        session.updateActiveText(registerUndo: false) { $0.text = "First Text" }
-        session.textContent = "First Text"
-        session.commitTextEdit()
+        // User types something and hits ESC
+        session.updateActiveText(registerUndo: false) { $0.text = "Typed then Cancelled" }
+        session.textContent = "Typed then Cancelled"
+        session.cancelTextEdit()
+        #expect(!session.isEditingText)
         #expect(session.textContent == "")
+        #expect(session.document?.layers.count == 0)
 
-        // 2. Second text layer should NOT leak "First Text"
+        // 2. Click again: Second text layer MUST start completely empty
         session.addTextLayer(at: CGPoint(x: 100, y: 100))
         let second = try #require(session.activeLayer)
         #expect(second.liveText?.style.text == "")
-        #expect(second.id != first.id)
+        #expect(session.textContent == "")
     }
 
     @Test func beginEditingExistingTextPreservesTextImmediately() throws {

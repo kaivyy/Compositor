@@ -365,9 +365,9 @@ extension EditorSession {
     }
 
     /// Adds a new text layer at `point` in document coordinates and starts inline editing.
-    func addTextLayer(at point: CGPoint, content: String? = nil) {
+    func addTextLayer(at point: CGPoint, content: String = "") {
         guard canEditLayers, document != nil else { return }
-        let textString = content ?? textContent
+        let textString = content
         var style = currentTextStyle(overrideText: textString)
         style.red = foregroundColor.red
         style.green = foregroundColor.green
