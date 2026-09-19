@@ -233,6 +233,8 @@ final class EditorSession {
     var textAlignment: LayerTextAlignment = .left
     var textEditingLayerID: UUID?
     var isEditingText: Bool { textEditingLayerID != nil }
+    var initialEditingText: String?
+    var textEditIsNewLayer: Bool = false
     var selectionModeChoice = SelectionMode.replace
     /// Mode implied by the Shift/Option keys currently held, nil when neither is.
     var heldSelectionMode: SelectionMode?

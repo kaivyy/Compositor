@@ -292,23 +292,55 @@ extension EditorSession {
     }
 
     /// Begins inline canvas editing for the text layer with `layerID`.
-    func beginTextEdit(layerID: UUID) {
+    func beginTextEdit(layerID: UUID, isNewLayer: Bool = false) {
         guard canEditLayers, let layer = document?.layers.first(where: { $0.id == layerID }), layer.liveText != nil else { return }
         if textEditingLayerID != layerID {
-            endTextEdit(commitUndo: false)
+            commitTextEdit()
         }
         selectLayer(layerID)
         loadTextStyleFromActiveLayer()
         textEditingLayerID = layerID
+        initialEditingText = layer.liveText?.style.text
+        textEditIsNewLayer = isNewLayer
     }
 
-    /// Ends inline text editing, optionally committing an undo transaction if edits occurred.
-    func endTextEdit(commitUndo: Bool = true) {
-        guard textEditingLayerID != nil else { return }
+    /// Commits inline text editing, finalizing the raster and registering an undo transaction if modified.
+    func commitTextEdit() {
+        guard let editingID = textEditingLayerID else { return }
         textEditingLayerID = nil
-        if commitUndo {
+
+        let trimmed = textContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty && textEditIsNewLayer {
+            deleteLayer(editingID)
+        } else if initialEditingText != textContent {
             beginEdit("Type Edit")
             endEdit()
+        }
+        initialEditingText = nil
+        textEditIsNewLayer = false
+    }
+
+    /// Cancels inline text editing, restoring previous text or removing the layer if it was freshly created.
+    func cancelTextEdit() {
+        guard let editingID = textEditingLayerID else { return }
+        textEditingLayerID = nil
+
+        if textEditIsNewLayer {
+            deleteLayer(editingID)
+        } else if let initial = initialEditingText {
+            updateActiveText(registerUndo: false) { $0.text = initial }
+            textContent = initial
+        }
+        initialEditingText = nil
+        textEditIsNewLayer = false
+    }
+
+    /// Ends inline text editing, committing by default or cancelling if requested.
+    func endTextEdit(commitUndo: Bool = true) {
+        if commitUndo {
+            commitTextEdit()
+        } else {
+            cancelTextEdit()
         }
     }
 
@@ -329,7 +361,7 @@ extension EditorSession {
                           dropsSelection: false, text: LayerText(style: style, image: rendered.image))
             textContent = textString
             if let activeID = activeLayerID {
-                beginTextEdit(layerID: activeID)
+                beginTextEdit(layerID: activeID, isNewLayer: true)
             }
         } catch {
             brushError = error.localizedDescription

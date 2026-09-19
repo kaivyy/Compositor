@@ -499,6 +499,7 @@ final class CanvasView: NSView {
             if inlineEditor != nil {
                 inlineEditor?.removeFromSuperview()
                 inlineEditor = nil
+                needsDisplay = true
             }
             return
         }
@@ -514,6 +515,7 @@ final class CanvasView: NSView {
                 guard let self, let editor, let window = self.window else { return }
                 window.makeFirstResponder(editor)
             }
+            needsDisplay = true
         } else {
             inlineEditor?.updateStylesAndText()
         }
@@ -529,12 +531,12 @@ final class CanvasView: NSView {
 
         let viewOrigin = session.viewport.viewPoint(from: layer.origin, documentSize: document.size)
         let scale = session.viewport.pointsPerPixel
-        let layerW = max(120, layer.size.width * scale)
-        let layerH = max(36, layer.size.height * scale)
-        let frame = CGRect(x: (viewOrigin.x - 8).rounded(),
-                           y: (viewOrigin.y - 6).rounded(),
-                           width: (layerW + 16).rounded(),
-                           height: (layerH + 12).rounded())
+        let layerW = max(30, layer.size.width * scale)
+        let layerH = max(20, layer.size.height * scale)
+        let frame = CGRect(x: viewOrigin.x.rounded(),
+                           y: viewOrigin.y.rounded(),
+                           width: layerW.rounded(),
+                           height: layerH.rounded())
         if inlineEditor.frame != frame {
             inlineEditor.frame = frame
         }
@@ -763,6 +765,7 @@ final class CanvasView: NSView {
         let byID = Dictionary(uniqueKeysWithValues: document.layers.map { ($0.id, $0) })
         func drawOwn(_ id: UUID, _ context: CGContext) {
             guard let layer = byID[id] else { return }
+            if session.textEditingLayerID == id { return }
             let mode = session.displayedBlendMode(for: layer)
             if SeparableBlend.isCoreGraphicsWrong(mode), normalBlendLayerID != id {
                 normalBlendLayerID = id
@@ -1914,26 +1917,21 @@ final class CanvasInlineTextView: NSTextView, NSTextViewDelegate {
         let textContainer = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
         textContainer.widthTracksTextView = false
         textContainer.heightTracksTextView = false
+        textContainer.lineFragmentPadding = 0
         layoutManager.addTextContainer(textContainer)
 
         super.init(frame: .zero, textContainer: textContainer)
         self.delegate = self
         self.isRichText = false
-        self.drawsBackground = true
-        self.backgroundColor = NSColor(white: 0.12, alpha: 0.90)
+        self.drawsBackground = false
         self.insertionPointColor = .white
         self.isVerticallyResizable = true
         self.isHorizontallyResizable = true
         self.autoresizingMask = []
-        self.textContainerInset = NSSize(width: 8, height: 6)
         self.wantsLayer = true
-        self.layer?.cornerRadius = 4
-        self.layer?.borderWidth = 1.5
-        self.layer?.borderColor = NSColor.controlAccentColor.cgColor
-        self.layer?.shadowColor = NSColor.black.cgColor
-        self.layer?.shadowOpacity = 0.5
-        self.layer?.shadowRadius = 4
-        self.layer?.shadowOffset = CGSize(width: 0, height: -2)
+        self.layer?.cornerRadius = 2
+        self.layer?.borderWidth = 1
+        self.layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.6).cgColor
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -1949,8 +1947,13 @@ final class CanvasInlineTextView: NSTextView, NSTextViewDelegate {
         let fontSize = max(8, style.fontSize * scale)
         let font = FontHelper.font(family: style.fontFamily, style: style.fontStyle, size: fontSize)
         self.font = font
-        self.textColor = NSColor(srgbRed: style.red, green: style.green, blue: style.blue, alpha: 1.0)
+        let textColor = NSColor(srgbRed: style.red, green: style.green, blue: style.blue, alpha: 1.0)
+        self.textColor = textColor
+        self.insertionPointColor = textColor
         self.alignment = style.alignment.nsTextAlignment
+        let padX = 8.0 * scale
+        let padY = 8.0 * scale
+        self.textContainerInset = NSSize(width: padX, height: padY)
         isSyncing = false
     }
 
@@ -1964,12 +1967,12 @@ final class CanvasInlineTextView: NSTextView, NSTextViewDelegate {
 
     override func doCommand(by selector: Selector) {
         if selector == #selector(cancelOperation(_:)) {
-            session?.endTextEdit()
+            session?.cancelTextEdit()
             canvasView?.window?.makeFirstResponder(canvasView)
             return
         }
         if selector == #selector(insertNewline(_:)) && NSEvent.modifierFlags.contains(.command) {
-            session?.endTextEdit()
+            session?.commitTextEdit()
             canvasView?.window?.makeFirstResponder(canvasView)
             return
         }

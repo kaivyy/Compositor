@@ -227,5 +227,35 @@ import AppKit
         #expect(!session.isEditingText)
         #expect(session.textEditingLayerID == nil)
     }
+
+    @Test func cancelTextEditRevertsExistingLayerAndCleansUpNewLayer() throws {
+        let session = EditorSession()
+        session.createDocument(width: 800, height: 600)
+
+        // Case 1: Cancel on newly added layer cleans it up
+        session.addTextLayer(at: CGPoint(x: 100, y: 100), content: "Temporary")
+        #expect(session.document?.layers.count == 1)
+        #expect(session.isEditingText)
+
+        session.cancelTextEdit()
+        #expect(!session.isEditingText)
+        #expect(session.document?.layers.count == 0)
+
+        // Case 2: Cancel on existing layer reverts to pre-edit text
+        session.addTextLayer(at: CGPoint(x: 50, y: 50), content: "Original Title")
+        session.commitTextEdit()
+        #expect(session.document?.layers.count == 1)
+
+        let layer = try #require(session.activeLayer)
+        session.beginTextEdit(layerID: layer.id)
+        session.updateActiveText(registerUndo: false) { $0.text = "Changed Unwanted" }
+        session.textContent = "Changed Unwanted"
+
+        session.cancelTextEdit()
+        #expect(!session.isEditingText)
+        #expect(session.activeLayer?.liveText?.style.text == "Original Title")
+        #expect(session.textContent == "Original Title")
+    }
 }
+
 

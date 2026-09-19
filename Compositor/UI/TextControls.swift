@@ -11,22 +11,6 @@ struct TextControls: View {
         HStack(spacing: 12) {
             Text("Type").font(ToolHeaderStyle.titleFont)
 
-            // Text content input
-            HStack(spacing: 4) {
-                TextField("Text", text: Binding(
-                    get: { session.textContent },
-                    set: { newText in
-                        session.textContent = newText
-                        if session.activeLayer?.liveText != nil {
-                            session.updateActiveText(registerUndo: false) { $0.text = newText }
-                        }
-                    }
-                ))
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 140)
-            }
-            .help("Edit text for the active text layer")
-
             // Font Family Picker
             Picker("Font Family", selection: Binding(
                 get: { session.textFontFamily },
@@ -161,6 +145,36 @@ struct TextControls: View {
                 CharacterParagraphPanel(session: session)
                     .frame(width: 280)
                     .padding(12)
+            }
+
+            if session.isEditingText {
+                Divider().frame(height: 16)
+
+                HStack(spacing: 6) {
+                    Button {
+                        session.cancelTextEdit()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 22, height: 20)
+                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Cancel text edit (Esc)")
+
+                    Button {
+                        session.commitTextEdit()
+                    } label: {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.green)
+                            .frame(width: 22, height: 20)
+                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Commit text edit (⌘-Return)")
+                }
             }
 
             Spacer(minLength: 0)
