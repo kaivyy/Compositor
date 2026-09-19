@@ -508,7 +508,7 @@ struct CharacterParagraphPanel: View {
             Divider()
 
             // Stroke Section
-            VStack(spacing: 6) {
+            VStack(spacing: 8) {
                 HStack {
                     Text("Stroke").font(.caption.bold())
                     Spacer()
@@ -525,62 +525,90 @@ struct CharacterParagraphPanel: View {
                     }
                 }
 
-                HStack(spacing: 8) {
-                    HStack(spacing: 4) {
-                        Text("Size:").font(.caption).foregroundStyle(.secondary)
-                        TextField("Width", value: Binding(
-                            get: { session.textStrokeWidth },
-                            set: { val in
-                                let v = max(0, min(100, val ?? 0))
-                                session.textStrokeWidth = v
-                                if session.activeLayer?.liveText != nil {
-                                    session.updateActiveText { $0.strokeWidth = v }
-                                }
-                            }
-                        ), format: .number.precision(.fractionLength(0)))
-                        .textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.trailing)
-                        .unitSuffix("px")
-                    }
+                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                    GridRow {
+                        Text("Width:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .gridColumnAlignment(.trailing)
 
-                    Picker("Position", selection: Binding(
-                        get: { session.textStrokePosition },
-                        set: { newPos in
-                            session.textStrokePosition = newPos
-                            if session.activeLayer?.liveText != nil {
-                                session.updateActiveText { $0.strokePosition = newPos }
-                            }
-                        }
-                    )) {
-                        ForEach(TextStrokePosition.allCases, id: \.self) { pos in
-                            Text(pos.rawValue).tag(pos)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 90)
-                }
-
-                HStack(spacing: 8) {
-                    Text("Color:").font(.caption).foregroundStyle(.secondary)
-                    ColorPicker("", selection: Binding(
-                        get: { Color(red: session.textStrokeRed, green: session.textStrokeGreen, blue: session.textStrokeBlue) },
-                        set: { newColor in
-                            if let nsColor = NSColor(newColor).usingColorSpace(.sRGB) {
-                                session.textStrokeRed = nsColor.redComponent
-                                session.textStrokeGreen = nsColor.greenComponent
-                                session.textStrokeBlue = nsColor.blueComponent
-                                if session.activeLayer?.liveText != nil {
-                                    session.updateActiveText {
-                                        $0.strokeRed = nsColor.redComponent
-                                        $0.strokeGreen = nsColor.greenComponent
-                                        $0.strokeBlue = nsColor.blueComponent
+                        HStack(spacing: 4) {
+                            TextField("0", value: Binding(
+                                get: { session.textStrokeWidth },
+                                set: { val in
+                                    let v = max(0, min(100, val ?? 0))
+                                    session.textStrokeWidth = v
+                                    if session.activeLayer?.liveText != nil {
+                                        session.updateActiveText { $0.strokeWidth = v }
                                     }
                                 }
+                            ), format: .number.precision(.fractionLength(0)))
+                            .textFieldStyle(.roundedBorder)
+                            .multilineTextAlignment(.trailing)
+                            .unitSuffix("px")
+
+                            Stepper("", value: Binding(
+                                get: { session.textStrokeWidth },
+                                set: { v in
+                                    session.textStrokeWidth = v
+                                    if session.activeLayer?.liveText != nil {
+                                        session.updateActiveText { $0.strokeWidth = v }
+                                    }
+                                }
+                            ), in: 0...100, step: 1)
+                            .labelsHidden()
+                        }
+                    }
+
+                    GridRow {
+                        Text("Position:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Picker("", selection: Binding(
+                            get: { session.textStrokePosition },
+                            set: { newPos in
+                                session.textStrokePosition = newPos
+                                if session.activeLayer?.liveText != nil {
+                                    session.updateActiveText { $0.strokePosition = newPos }
+                                }
+                            }
+                        )) {
+                            ForEach(TextStrokePosition.allCases, id: \.self) { pos in
+                                Text(pos.rawValue).tag(pos)
                             }
                         }
-                    ))
-                    .labelsHidden()
-                    Spacer()
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+
+                    GridRow {
+                        Text("Color:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 8) {
+                            ColorPicker("", selection: Binding(
+                                get: { Color(red: session.textStrokeRed, green: session.textStrokeGreen, blue: session.textStrokeBlue) },
+                                set: { newColor in
+                                    if let nsColor = NSColor(newColor).usingColorSpace(.sRGB) {
+                                        session.textStrokeRed = nsColor.redComponent
+                                        session.textStrokeGreen = nsColor.greenComponent
+                                        session.textStrokeBlue = nsColor.blueComponent
+                                        if session.activeLayer?.liveText != nil {
+                                            session.updateActiveText {
+                                                $0.strokeRed = nsColor.redComponent
+                                                $0.strokeGreen = nsColor.greenComponent
+                                                $0.strokeBlue = nsColor.blueComponent
+                                            }
+                                        }
+                                    }
+                                }
+                            ))
+                            .labelsHidden()
+                            Spacer()
+                        }
+                    }
                 }
             }
         }
@@ -632,24 +660,30 @@ struct StrokeToolbarButton: View {
         Button {
             showingStrokePopover.toggle()
         } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "pencil.and.outline")
-                    .font(.system(size: 13))
+            let swatch = RoundedRectangle(cornerRadius: 3, style: .continuous)
+            ZStack {
                 if session.textStrokeWidth > 0 {
-                    Text("\(Int(session.textStrokeWidth))px")
-                        .font(.caption2.bold())
+                    swatch
+                        .strokeBorder(Color(red: session.textStrokeRed, green: session.textStrokeGreen, blue: session.textStrokeBlue), lineWidth: 3)
+                        .background(swatch.fill(Color.black.opacity(0.2)))
+                } else {
+                    swatch
+                        .strokeBorder(Color.white.opacity(0.4), lineWidth: 1)
+                        .background(swatch.fill(Color.black.opacity(0.2)))
+                        .overlay {
+                            // Red diagonal slash for "No Stroke"
+                            Path { p in
+                                p.move(to: CGPoint(x: 4, y: 14))
+                                p.addLine(to: CGPoint(x: 26, y: 4))
+                            }
+                            .stroke(Color.red.opacity(0.85), lineWidth: 1.5)
+                        }
                 }
             }
-            .padding(.horizontal, 6)
-            .frame(height: 20)
-            .background(session.textStrokeWidth > 0 ? Color.accentColor.opacity(0.2) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
-            .overlay {
-                RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(session.textStrokeWidth > 0 ? Color.accentColor : Color.white.opacity(0.12))
-            }
+            .frame(width: 30, height: 18)
         }
         .buttonStyle(.plain)
-        .help("Text Stroke (outer, center, inner)")
+        .help("Text stroke; click to configure width, position, and color")
         .popover(isPresented: $showingStrokePopover, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
@@ -662,75 +696,103 @@ struct StrokeToolbarButton: View {
                                 session.updateActiveText { $0.strokeWidth = 0 }
                             }
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.borderless)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
                     }
                 }
 
                 Divider()
 
-                HStack(spacing: 12) {
-                    Text("Width:").font(.caption).frame(width: 55, alignment: .leading)
-                    TextField("Width", value: Binding(
-                        get: { session.textStrokeWidth },
-                        set: { val in
-                            let v = max(0, min(100, val ?? 0))
-                            session.textStrokeWidth = v
-                            if session.activeLayer?.liveText != nil {
-                                session.updateActiveText { $0.strokeWidth = v }
-                            }
-                        }
-                    ), format: .number.precision(.fractionLength(0)))
-                    .textFieldStyle(.roundedBorder)
-                    .multilineTextAlignment(.trailing)
-                    .unitSuffix("px")
-                }
+                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                    GridRow {
+                        Text("Width:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .gridColumnAlignment(.trailing)
 
-                HStack(spacing: 12) {
-                    Text("Position:").font(.caption).frame(width: 55, alignment: .leading)
-                    Picker("", selection: Binding(
-                        get: { session.textStrokePosition },
-                        set: { newPos in
-                            session.textStrokePosition = newPos
-                            if session.activeLayer?.liveText != nil {
-                                session.updateActiveText { $0.strokePosition = newPos }
-                            }
-                        }
-                    )) {
-                        ForEach(TextStrokePosition.allCases, id: \.self) { pos in
-                            Text(pos.rawValue).tag(pos)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
-
-                HStack(spacing: 12) {
-                    Text("Color:").font(.caption).frame(width: 55, alignment: .leading)
-                    ColorPicker("", selection: Binding(
-                        get: { Color(red: session.textStrokeRed, green: session.textStrokeGreen, blue: session.textStrokeBlue) },
-                        set: { newColor in
-                            if let nsColor = NSColor(newColor).usingColorSpace(.sRGB) {
-                                session.textStrokeRed = nsColor.redComponent
-                                session.textStrokeGreen = nsColor.greenComponent
-                                session.textStrokeBlue = nsColor.blueComponent
-                                if session.activeLayer?.liveText != nil {
-                                    session.updateActiveText {
-                                        $0.strokeRed = nsColor.redComponent
-                                        $0.strokeGreen = nsColor.greenComponent
-                                        $0.strokeBlue = nsColor.blueComponent
+                        HStack(spacing: 4) {
+                            TextField("0", value: Binding(
+                                get: { session.textStrokeWidth },
+                                set: { val in
+                                    let v = max(0, min(100, val ?? 0))
+                                    session.textStrokeWidth = v
+                                    if session.activeLayer?.liveText != nil {
+                                        session.updateActiveText { $0.strokeWidth = v }
                                     }
                                 }
+                            ), format: .number.precision(.fractionLength(0)))
+                            .textFieldStyle(.roundedBorder)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 60)
+                            .unitSuffix("px")
+
+                            Stepper("", value: Binding(
+                                get: { session.textStrokeWidth },
+                                set: { v in
+                                    session.textStrokeWidth = v
+                                    if session.activeLayer?.liveText != nil {
+                                        session.updateActiveText { $0.strokeWidth = v }
+                                    }
+                                }
+                            ), in: 0...100, step: 1)
+                            .labelsHidden()
+                        }
+                    }
+
+                    GridRow {
+                        Text("Position:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Picker("", selection: Binding(
+                            get: { session.textStrokePosition },
+                            set: { newPos in
+                                session.textStrokePosition = newPos
+                                if session.activeLayer?.liveText != nil {
+                                    session.updateActiveText { $0.strokePosition = newPos }
+                                }
+                            }
+                        )) {
+                            ForEach(TextStrokePosition.allCases, id: \.self) { pos in
+                                Text(pos.rawValue).tag(pos)
                             }
                         }
-                    ))
-                    .labelsHidden()
-                    Spacer()
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 170)
+                    }
+
+                    GridRow {
+                        Text("Color:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 8) {
+                            ColorPicker("", selection: Binding(
+                                get: { Color(red: session.textStrokeRed, green: session.textStrokeGreen, blue: session.textStrokeBlue) },
+                                set: { newColor in
+                                    if let nsColor = NSColor(newColor).usingColorSpace(.sRGB) {
+                                        session.textStrokeRed = nsColor.redComponent
+                                        session.textStrokeGreen = nsColor.greenComponent
+                                        session.textStrokeBlue = nsColor.blueComponent
+                                        if session.activeLayer?.liveText != nil {
+                                            session.updateActiveText {
+                                                $0.strokeRed = nsColor.redComponent
+                                                $0.strokeGreen = nsColor.greenComponent
+                                                $0.strokeBlue = nsColor.blueComponent
+                                            }
+                                        }
+                                    }
+                                }
+                            ))
+                            .labelsHidden()
+                            Spacer()
+                        }
+                    }
                 }
             }
-            .frame(width: 230)
-            .padding(12)
+            .padding(14)
+            .frame(width: 270)
         }
     }
 }

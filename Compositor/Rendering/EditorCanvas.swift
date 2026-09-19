@@ -538,7 +538,8 @@ final class CanvasView: NSView {
         let viewOrigin = session.viewport.viewPoint(from: layer.origin, documentSize: document.size)
         let scale = session.viewport.pointsPerPixel
         let fontSize = layer.liveText?.style.fontSize ?? 36
-        let strokePad = (layer.liveText?.style.strokeWidth ?? 0) * scale
+        let strokeMultiplier: CGFloat = layer.liveText?.style.strokePosition == .outside ? 2 : 1
+        let strokePad = max(0, (layer.liveText?.style.strokeWidth ?? 0) * strokeMultiplier) * scale
         let minW = fontSize * 3 * scale
         let minH = fontSize * 1.3 * scale
         let layerW = max(140, max(layer.size.width * scale, minW) + strokePad * 2)
@@ -1958,6 +1959,7 @@ final class CanvasInlineTextView: NSTextView, NSTextViewDelegate {
         let scale = session.viewport.pointsPerPixel
         if text.style != lastAppliedStyle || scale != lastAppliedScale {
             updateStylesAndText()
+            canvasView?.updateInlineEditorGeometry()
         }
     }
 
@@ -1966,7 +1968,7 @@ final class CanvasInlineTextView: NSTextView, NSTextViewDelegate {
         isSyncing = true
         let style = text.style
         let scale = session.viewport.pointsPerPixel
-        let extraPad = max(0, style.strokeWidth) * scale
+        let extraPad = max(0, style.strokeWidth * (style.strokePosition == .outside ? 2 : 1)) * scale
         let padX = (8.0 * scale) + extraPad
         let padY = (8.0 * scale) + extraPad
         self.textContainerInset = NSSize(width: padX, height: padY)

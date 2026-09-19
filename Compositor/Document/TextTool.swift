@@ -194,8 +194,9 @@ nonisolated struct LayerTextStyle: Codable, Equatable, Sendable {
                 attributes[.strokeWidth] = strokeW
                 attributes[.strokeColor] = strokeColor
                 attributes[.foregroundColor] = strokeColor
-            } else if strokePosition == .center || strokePosition == .inside {
-                attributes[.strokeWidth] = -(strokeWidth * scale)
+            } else {
+                let strokeW = (strokePosition == .outside ? strokeWidth * 1.5 : strokeWidth) * scale
+                attributes[.strokeWidth] = -strokeW
                 attributes[.strokeColor] = strokeColor
             }
         }
@@ -285,7 +286,7 @@ extension EditorSession {
             return (image, CGSize(width: CGFloat(defaultW), height: CGFloat(defaultH)))
         }
 
-        let extraPad = max(0, style.strokeWidth)
+        let extraPad = max(0, style.strokeWidth * (style.strokePosition == .outside ? 2 : 1))
         let padX: CGFloat = 8.0 + extraPad
         let padY: CGFloat = 8.0 + extraPad
         let bounds = attrString.boundingRect(with: CGSize(width: 10_000, height: 10_000), options: [.usesLineFragmentOrigin, .usesFontLeading])
