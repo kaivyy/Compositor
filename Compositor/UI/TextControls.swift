@@ -525,14 +525,15 @@ struct CharacterParagraphPanel: View {
                     }
                 }
 
-                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 10) {
                     GridRow {
                         Text("Width:")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .frame(width: 55, alignment: .trailing)
                             .gridColumnAlignment(.trailing)
 
-                        HStack(spacing: 4) {
+                        HStack(spacing: 6) {
                             TextField("0", value: Binding(
                                 get: { session.textStrokeWidth },
                                 set: { val in
@@ -564,6 +565,8 @@ struct CharacterParagraphPanel: View {
                         Text("Position:")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .frame(width: 55, alignment: .trailing)
+                            .gridColumnAlignment(.trailing)
 
                         Picker("", selection: Binding(
                             get: { session.textStrokePosition },
@@ -586,6 +589,8 @@ struct CharacterParagraphPanel: View {
                         Text("Color:")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .frame(width: 55, alignment: .trailing)
+                            .gridColumnAlignment(.trailing)
 
                         HStack(spacing: 8) {
                             ColorPicker("", selection: Binding(
@@ -708,6 +713,7 @@ struct StrokeToolbarButton: View {
                         Text("Width:")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .frame(width: 55, alignment: .trailing)
                             .gridColumnAlignment(.trailing)
 
                         HStack(spacing: 4) {
@@ -743,6 +749,8 @@ struct StrokeToolbarButton: View {
                         Text("Position:")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .frame(width: 55, alignment: .trailing)
+                            .gridColumnAlignment(.trailing)
 
                         Picker("", selection: Binding(
                             get: { session.textStrokePosition },
@@ -759,13 +767,14 @@ struct StrokeToolbarButton: View {
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
-                        .frame(width: 170)
                     }
 
                     GridRow {
                         Text("Color:")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .frame(width: 55, alignment: .trailing)
+                            .gridColumnAlignment(.trailing)
 
                         HStack(spacing: 8) {
                             ColorPicker("", selection: Binding(
@@ -791,8 +800,8 @@ struct StrokeToolbarButton: View {
                     }
                 }
             }
-            .padding(14)
-            .frame(width: 270)
+            .padding(12)
+            .frame(width: 290)
         }
     }
 }
