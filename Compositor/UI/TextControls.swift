@@ -125,6 +125,9 @@ struct TextControls: View {
                 .help("Text color; click to change")
             }
 
+            // Stroke popover button
+            StrokeToolbarButton(session: session)
+
             // Button to open Photoshop Character & Paragraph Panel
             Button {
                 showingCharacterPanel.toggle()
@@ -501,6 +504,85 @@ struct CharacterParagraphPanel: View {
                 .strikethrough()
                 .font(.system(size: 12, weight: .regular))
             }
+
+            Divider()
+
+            // Stroke Section
+            VStack(spacing: 6) {
+                HStack {
+                    Text("Stroke").font(.caption.bold())
+                    Spacer()
+                    if session.textStrokeWidth > 0 {
+                        Button("None") {
+                            session.textStrokeWidth = 0
+                            if session.activeLayer?.liveText != nil {
+                                session.updateActiveText { $0.strokeWidth = 0 }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    HStack(spacing: 4) {
+                        Text("Size:").font(.caption).foregroundStyle(.secondary)
+                        TextField("Width", value: Binding(
+                            get: { session.textStrokeWidth },
+                            set: { val in
+                                let v = max(0, min(100, val ?? 0))
+                                session.textStrokeWidth = v
+                                if session.activeLayer?.liveText != nil {
+                                    session.updateActiveText { $0.strokeWidth = v }
+                                }
+                            }
+                        ), format: .number.precision(.fractionLength(0)))
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .unitSuffix("px")
+                    }
+
+                    Picker("Position", selection: Binding(
+                        get: { session.textStrokePosition },
+                        set: { newPos in
+                            session.textStrokePosition = newPos
+                            if session.activeLayer?.liveText != nil {
+                                session.updateActiveText { $0.strokePosition = newPos }
+                            }
+                        }
+                    )) {
+                        ForEach(TextStrokePosition.allCases, id: \.self) { pos in
+                            Text(pos.rawValue).tag(pos)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 90)
+                }
+
+                HStack(spacing: 8) {
+                    Text("Color:").font(.caption).foregroundStyle(.secondary)
+                    ColorPicker("", selection: Binding(
+                        get: { Color(red: session.textStrokeRed, green: session.textStrokeGreen, blue: session.textStrokeBlue) },
+                        set: { newColor in
+                            if let nsColor = NSColor(newColor).usingColorSpace(.sRGB) {
+                                session.textStrokeRed = nsColor.redComponent
+                                session.textStrokeGreen = nsColor.greenComponent
+                                session.textStrokeBlue = nsColor.blueComponent
+                                if session.activeLayer?.liveText != nil {
+                                    session.updateActiveText {
+                                        $0.strokeRed = nsColor.redComponent
+                                        $0.strokeGreen = nsColor.greenComponent
+                                        $0.strokeBlue = nsColor.blueComponent
+                                    }
+                                }
+                            }
+                        }
+                    ))
+                    .labelsHidden()
+                    Spacer()
+                }
+            }
         }
     }
 
@@ -538,6 +620,118 @@ struct CharacterParagraphPanel: View {
         }
         .buttonStyle(.plain)
         .help(tooltip)
+    }
+}
+
+/// Popover toolbar button for quick stroke configuration (width, position, color).
+struct StrokeToolbarButton: View {
+    @Bindable var session: EditorSession
+    @State private var showingStrokePopover = false
+
+    var body: some View {
+        Button {
+            showingStrokePopover.toggle()
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "pencil.and.outline")
+                    .font(.system(size: 13))
+                if session.textStrokeWidth > 0 {
+                    Text("\(Int(session.textStrokeWidth))px")
+                        .font(.caption2.bold())
+                }
+            }
+            .padding(.horizontal, 6)
+            .frame(height: 20)
+            .background(session.textStrokeWidth > 0 ? Color.accentColor.opacity(0.2) : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+            .overlay {
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(session.textStrokeWidth > 0 ? Color.accentColor : Color.white.opacity(0.12))
+            }
+        }
+        .buttonStyle(.plain)
+        .help("Text Stroke (outer, center, inner)")
+        .popover(isPresented: $showingStrokePopover, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Text Stroke").font(.headline)
+                    Spacer()
+                    if session.textStrokeWidth > 0 {
+                        Button("None") {
+                            session.textStrokeWidth = 0
+                            if session.activeLayer?.liveText != nil {
+                                session.updateActiveText { $0.strokeWidth = 0 }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+
+                Divider()
+
+                HStack(spacing: 12) {
+                    Text("Width:").font(.caption).frame(width: 55, alignment: .leading)
+                    TextField("Width", value: Binding(
+                        get: { session.textStrokeWidth },
+                        set: { val in
+                            let v = max(0, min(100, val ?? 0))
+                            session.textStrokeWidth = v
+                            if session.activeLayer?.liveText != nil {
+                                session.updateActiveText { $0.strokeWidth = v }
+                            }
+                        }
+                    ), format: .number.precision(.fractionLength(0)))
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.trailing)
+                    .unitSuffix("px")
+                }
+
+                HStack(spacing: 12) {
+                    Text("Position:").font(.caption).frame(width: 55, alignment: .leading)
+                    Picker("", selection: Binding(
+                        get: { session.textStrokePosition },
+                        set: { newPos in
+                            session.textStrokePosition = newPos
+                            if session.activeLayer?.liveText != nil {
+                                session.updateActiveText { $0.strokePosition = newPos }
+                            }
+                        }
+                    )) {
+                        ForEach(TextStrokePosition.allCases, id: \.self) { pos in
+                            Text(pos.rawValue).tag(pos)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+
+                HStack(spacing: 12) {
+                    Text("Color:").font(.caption).frame(width: 55, alignment: .leading)
+                    ColorPicker("", selection: Binding(
+                        get: { Color(red: session.textStrokeRed, green: session.textStrokeGreen, blue: session.textStrokeBlue) },
+                        set: { newColor in
+                            if let nsColor = NSColor(newColor).usingColorSpace(.sRGB) {
+                                session.textStrokeRed = nsColor.redComponent
+                                session.textStrokeGreen = nsColor.greenComponent
+                                session.textStrokeBlue = nsColor.blueComponent
+                                if session.activeLayer?.liveText != nil {
+                                    session.updateActiveText {
+                                        $0.strokeRed = nsColor.redComponent
+                                        $0.strokeGreen = nsColor.greenComponent
+                                        $0.strokeBlue = nsColor.blueComponent
+                                    }
+                                }
+                            }
+                        }
+                    ))
+                    .labelsHidden()
+                    Spacer()
+                }
+            }
+            .frame(width: 230)
+            .padding(12)
+        }
     }
 }
 

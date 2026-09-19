@@ -524,6 +524,7 @@ final class CanvasView: NSView {
             }
             needsDisplay = true
         } else {
+            inlineEditor?.checkAndUpdateStylesIfNeeded()
             updateInlineEditorGeometry()
         }
     }
@@ -537,10 +538,11 @@ final class CanvasView: NSView {
         let viewOrigin = session.viewport.viewPoint(from: layer.origin, documentSize: document.size)
         let scale = session.viewport.pointsPerPixel
         let fontSize = layer.liveText?.style.fontSize ?? 36
+        let strokePad = (layer.liveText?.style.strokeWidth ?? 0) * scale
         let minW = fontSize * 3 * scale
         let minH = fontSize * 1.3 * scale
-        let layerW = max(140, max(layer.size.width * scale, minW))
-        let layerH = max(28, max(layer.size.height * scale, minH))
+        let layerW = max(140, max(layer.size.width * scale, minW) + strokePad * 2)
+        let layerH = max(28, max(layer.size.height * scale, minH) + strokePad * 2)
         let frame = CGRect(x: viewOrigin.x.rounded(),
                            y: viewOrigin.y.rounded(),
                            width: layerW.rounded(),
@@ -1917,6 +1919,8 @@ final class CanvasInlineTextView: NSTextView, NSTextViewDelegate {
     weak var canvasView: CanvasView?
     var layerID: UUID?
     private var isSyncing = false
+    private var lastAppliedStyle: LayerTextStyle?
+    private var lastAppliedScale: CGFloat = 0
 
     init(session: EditorSession, canvasView: CanvasView, layerID: UUID) {
         self.session = session
@@ -1947,13 +1951,24 @@ final class CanvasInlineTextView: NSTextView, NSTextViewDelegate {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    func checkAndUpdateStylesIfNeeded() {
+        guard let session,
+              let layer = session.document?.layers.first(where: { $0.id == layerID }),
+              let text = layer.liveText else { return }
+        let scale = session.viewport.pointsPerPixel
+        if text.style != lastAppliedStyle || scale != lastAppliedScale {
+            updateStylesAndText()
+        }
+    }
+
     func updateStylesAndText() {
         guard let session, let layer = session.document?.layers.first(where: { $0.id == layerID }), let text = layer.liveText else { return }
         isSyncing = true
         let style = text.style
         let scale = session.viewport.pointsPerPixel
-        let padX = 8.0 * scale
-        let padY = 8.0 * scale
+        let extraPad = max(0, style.strokeWidth) * scale
+        let padX = (8.0 * scale) + extraPad
+        let padY = (8.0 * scale) + extraPad
         self.textContainerInset = NSSize(width: padX, height: padY)
 
         let effectiveFontSize = max(1, style.fontSize * scale)
@@ -1991,6 +2006,8 @@ final class CanvasInlineTextView: NSTextView, NSTextViewDelegate {
         self.setSelectedRange(NSRange(location: loc, length: len))
 
         self.layoutManager?.invalidateLayout(forCharacterRange: NSRange(location: 0, length: strLen), actualCharacterRange: nil)
+        lastAppliedStyle = style
+        lastAppliedScale = scale
         self.needsDisplay = true
         isSyncing = false
     }

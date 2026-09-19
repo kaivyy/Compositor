@@ -27,6 +27,12 @@ nonisolated enum LayerTextAlignment: String, CaseIterable, Codable, Sendable {
     }
 }
 
+nonisolated enum TextStrokePosition: String, CaseIterable, Codable, Sendable {
+    case outside = "Outside"
+    case center = "Center"
+    case inside = "Inside"
+}
+
 /// What a text layer draws, kept so the text can be edited and re-rendered with new styles.
 nonisolated struct LayerTextStyle: Codable, Equatable, Sendable {
     var text: String = ""
@@ -62,11 +68,67 @@ nonisolated struct LayerTextStyle: Codable, Equatable, Sendable {
     // Paragraph
     var alignment: LayerTextAlignment = .left
 
+    // Stroke
+    var strokeWidth: CGFloat = 0
+    var strokePosition: TextStrokePosition = .outside
+    var strokeRed: CGFloat = 0
+    var strokeGreen: CGFloat = 0
+    var strokeBlue: CGFloat = 0
+    var strokeAlpha: CGFloat = 1
+
     var color: PaletteColor {
         PaletteColor(red: red, green: green, blue: blue)
     }
 
-    func makeAttributedString(scale: CGFloat = 1.0, overrideText: String? = nil) -> NSAttributedString {
+    var strokeColor: PaletteColor {
+        PaletteColor(red: strokeRed, green: strokeGreen, blue: strokeBlue)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case text, fontFamily, fontStyle, fontSize, leading, tracking
+        case verticalScale, horizontalScale, baselineShift
+        case red, green, blue, alpha
+        case isFauxBold, isFauxItalic, isAllCaps, isSmallCaps
+        case isSuperscript, isSubscript, isUnderline, isStrikethrough
+        case alignment
+        case strokeWidth, strokePosition, strokeRed, strokeGreen, strokeBlue, strokeAlpha
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
+        fontFamily = try container.decodeIfPresent(String.self, forKey: .fontFamily) ?? "Helvetica Neue"
+        fontStyle = try container.decodeIfPresent(String.self, forKey: .fontStyle) ?? "Regular"
+        fontSize = try container.decodeIfPresent(CGFloat.self, forKey: .fontSize) ?? 36
+        leading = try container.decodeIfPresent(CGFloat.self, forKey: .leading)
+        tracking = try container.decodeIfPresent(CGFloat.self, forKey: .tracking) ?? 0
+        verticalScale = try container.decodeIfPresent(CGFloat.self, forKey: .verticalScale) ?? 100
+        horizontalScale = try container.decodeIfPresent(CGFloat.self, forKey: .horizontalScale) ?? 100
+        baselineShift = try container.decodeIfPresent(CGFloat.self, forKey: .baselineShift) ?? 0
+        red = try container.decodeIfPresent(CGFloat.self, forKey: .red) ?? 0
+        green = try container.decodeIfPresent(CGFloat.self, forKey: .green) ?? 0
+        blue = try container.decodeIfPresent(CGFloat.self, forKey: .blue) ?? 0
+        alpha = try container.decodeIfPresent(CGFloat.self, forKey: .alpha) ?? 1
+        isFauxBold = try container.decodeIfPresent(Bool.self, forKey: .isFauxBold) ?? false
+        isFauxItalic = try container.decodeIfPresent(Bool.self, forKey: .isFauxItalic) ?? false
+        isAllCaps = try container.decodeIfPresent(Bool.self, forKey: .isAllCaps) ?? false
+        isSmallCaps = try container.decodeIfPresent(Bool.self, forKey: .isSmallCaps) ?? false
+        isSuperscript = try container.decodeIfPresent(Bool.self, forKey: .isSuperscript) ?? false
+        isSubscript = try container.decodeIfPresent(Bool.self, forKey: .isSubscript) ?? false
+        isUnderline = try container.decodeIfPresent(Bool.self, forKey: .isUnderline) ?? false
+        isStrikethrough = try container.decodeIfPresent(Bool.self, forKey: .isStrikethrough) ?? false
+        alignment = try container.decodeIfPresent(LayerTextAlignment.self, forKey: .alignment) ?? .left
+        strokeWidth = try container.decodeIfPresent(CGFloat.self, forKey: .strokeWidth) ?? 0
+        strokePosition = try container.decodeIfPresent(TextStrokePosition.self, forKey: .strokePosition) ?? .outside
+        strokeRed = try container.decodeIfPresent(CGFloat.self, forKey: .strokeRed) ?? 0
+        strokeGreen = try container.decodeIfPresent(CGFloat.self, forKey: .strokeGreen) ?? 0
+        strokeBlue = try container.decodeIfPresent(CGFloat.self, forKey: .strokeBlue) ?? 0
+        strokeAlpha = try container.decodeIfPresent(CGFloat.self, forKey: .strokeAlpha) ?? 1
+    }
+
+    func makeAttributedString(scale: CGFloat = 1.0, overrideText: String? = nil, forStroke: Bool = false) -> NSAttributedString {
         let textToUse = overrideText ?? text
         let effectiveFontSize = max(1, fontSize * scale)
         var baseFont = FontHelper.font(family: fontFamily, style: fontStyle, size: effectiveFontSize)
@@ -124,6 +186,19 @@ nonisolated struct LayerTextStyle: Codable, Equatable, Sendable {
             para.lineSpacing = 0
         }
         attributes[.paragraphStyle] = para
+
+        if strokeWidth > 0 {
+            let strokeColor = NSColor(srgbRed: strokeRed, green: strokeGreen, blue: strokeBlue, alpha: strokeAlpha)
+            if forStroke {
+                let strokeW = (strokePosition == .outside ? strokeWidth * 2 : strokeWidth) * scale
+                attributes[.strokeWidth] = strokeW
+                attributes[.strokeColor] = strokeColor
+                attributes[.foregroundColor] = strokeColor
+            } else if strokePosition == .center || strokePosition == .inside {
+                attributes[.strokeWidth] = -(strokeWidth * scale)
+                attributes[.strokeColor] = strokeColor
+            }
+        }
 
         return NSAttributedString(string: renderedString, attributes: attributes)
     }
@@ -210,8 +285,9 @@ extension EditorSession {
             return (image, CGSize(width: CGFloat(defaultW), height: CGFloat(defaultH)))
         }
 
-        let padX: CGFloat = 8.0
-        let padY: CGFloat = 8.0
+        let extraPad = max(0, style.strokeWidth)
+        let padX: CGFloat = 8.0 + extraPad
+        let padY: CGFloat = 8.0 + extraPad
         let bounds = attrString.boundingRect(with: CGSize(width: 10_000, height: 10_000), options: [.usesLineFragmentOrigin, .usesFontLeading])
         let textW = ceil(bounds.width)
         let textH = ceil(bounds.height)
@@ -249,7 +325,14 @@ extension EditorSession {
         let originX = ((padX - bounds.minX) / hScale).rounded()
         let originY = ((padY - bounds.minY) / vScale).rounded()
         let drawRect = CGRect(x: originX, y: originY, width: textW + 4, height: textH + 4)
-        attrString.draw(with: drawRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
+
+        if style.strokeWidth > 0 && style.strokePosition == .outside {
+            let strokeAttr = style.makeAttributedString(forStroke: true)
+            strokeAttr.draw(with: drawRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
+        }
+
+        let fillAttr = style.makeAttributedString(forStroke: false)
+        fillAttr.draw(with: drawRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
 
         context.restoreGState()
         NSGraphicsContext.restoreGraphicsState()
@@ -283,6 +366,12 @@ extension EditorSession {
         style.isUnderline = textUnderline
         style.isStrikethrough = textStrikethrough
         style.alignment = textAlignment
+        style.strokeWidth = textStrokeWidth
+        style.strokePosition = textStrokePosition
+        style.strokeRed = textStrokeRed
+        style.strokeGreen = textStrokeGreen
+        style.strokeBlue = textStrokeBlue
+        style.strokeAlpha = textStrokeAlpha
         return style
     }
 
@@ -313,6 +402,12 @@ extension EditorSession {
         textUnderline = style.isUnderline
         textStrikethrough = style.isStrikethrough
         textAlignment = style.alignment
+        textStrokeWidth = style.strokeWidth
+        textStrokePosition = style.strokePosition
+        textStrokeRed = style.strokeRed
+        textStrokeGreen = style.strokeGreen
+        textStrokeBlue = style.strokeBlue
+        textStrokeAlpha = style.strokeAlpha
         foregroundColor = style.color
     }
 
@@ -429,6 +524,7 @@ extension EditorSession {
             if registerUndo {
                 endEdit()
             }
+            refreshCanvasPreview?()
         } catch {
             brushError = error.localizedDescription
         }

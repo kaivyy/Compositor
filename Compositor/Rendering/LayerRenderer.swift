@@ -54,9 +54,9 @@ nonisolated enum LayerRenderer {
         if let clip { context.clip(to: coverage(of: clip, in: bounds), mask: clip.image) }
 
         let style = text.style
-        let attrString = style.makeAttributedString(scale: scale)
-        let padX = 8.0 * scale
-        let padY = 8.0 * scale
+        let extraPad = max(0, style.strokeWidth) * scale
+        let padX = (8.0 * scale) + extraPad
+        let padY = (8.0 * scale) + extraPad
         let drawRect = CGRect(x: bounds.minX + padX, y: bounds.minY + padY, width: max(0, width - padX * 2), height: max(0, height - padY * 2))
 
         NSGraphicsContext.saveGraphicsState()
@@ -70,8 +70,15 @@ nonisolated enum LayerRenderer {
         let vScale = max(0.1, style.verticalScale / 100.0)
         context.scaleBy(x: hScale, y: vScale)
 
-        attrString.draw(with: CGRect(x: drawRect.minX / hScale, y: drawRect.minY / vScale, width: drawRect.width / hScale, height: drawRect.height / vScale),
-                        options: [.usesLineFragmentOrigin, .usesFontLeading])
+        let targetRect = CGRect(x: drawRect.minX / hScale, y: drawRect.minY / vScale, width: drawRect.width / hScale, height: drawRect.height / vScale)
+
+        if style.strokeWidth > 0 && style.strokePosition == .outside {
+            let strokeAttr = style.makeAttributedString(scale: scale, forStroke: true)
+            strokeAttr.draw(with: targetRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
+        }
+
+        let fillAttr = style.makeAttributedString(scale: scale, forStroke: false)
+        fillAttr.draw(with: targetRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
 
         context.restoreGState()
         NSGraphicsContext.restoreGraphicsState()

@@ -231,6 +231,20 @@ final class EditorSession {
     var textUnderline: Bool = false
     var textStrikethrough: Bool = false
     var textAlignment: LayerTextAlignment = .left
+    var textStrokeWidth: CGFloat = 0
+    var textStrokePosition: TextStrokePosition = .outside
+    var textStrokeRed: CGFloat = 0
+    var textStrokeGreen: CGFloat = 0
+    var textStrokeBlue: CGFloat = 0
+    var textStrokeAlpha: CGFloat = 1
+    var textStrokeColor: PaletteColor {
+        get { PaletteColor(red: textStrokeRed, green: textStrokeGreen, blue: textStrokeBlue) }
+        set {
+            textStrokeRed = newValue.red
+            textStrokeGreen = newValue.green
+            textStrokeBlue = newValue.blue
+        }
+    }
     var textEditingLayerID: UUID?
     var isEditingText: Bool { textEditingLayerID != nil }
     var initialEditingText: String?

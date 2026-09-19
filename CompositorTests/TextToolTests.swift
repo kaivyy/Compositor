@@ -286,4 +286,56 @@ import AppKit
         #expect(session.activeLayer?.liveText?.style.text == "Existing Text")
         #expect(session.textContent == "Existing Text")
     }
+
+    @Test func textStrokeConfigurationAndRendering() throws {
+        var style = LayerTextStyle()
+        style.text = "STROKED"
+        style.fontSize = 48
+        style.strokeWidth = 6
+        style.strokePosition = .outside
+        style.strokeRed = 1
+        style.strokeGreen = 1
+        style.strokeBlue = 0
+        style.strokeAlpha = 1
+
+        let strokeAttr = style.makeAttributedString(scale: 1.0, forStroke: true)
+        let strokeAttrs = strokeAttr.attributes(at: 0, effectiveRange: nil)
+        #expect(strokeAttrs[.strokeWidth] as? CGFloat == 12) // Outside stroke uses 2x width
+        #expect(strokeAttrs[.strokeColor] as? NSColor != nil)
+
+        let centerAttr = {
+            var cStyle = style
+            cStyle.strokePosition = .center
+            return cStyle.makeAttributedString(scale: 1.0, forStroke: false)
+        }()
+        let centerAttrs = centerAttr.attributes(at: 0, effectiveRange: nil)
+        #expect(centerAttrs[.strokeWidth] as? CGFloat == -6) // Negative stroke width for stroke+fill
+
+        let (image, size) = try EditorSession.textImage(for: style)
+        #expect(image.width > 0)
+        #expect(image.height > 0)
+        #expect(size.width > 0)
+        #expect(size.height > 0)
+    }
+
+    @Test func realTimeStyleUpdatesTriggerCanvasRefresh() throws {
+        let session = EditorSession()
+        session.createDocument(width: 800, height: 600)
+        var previewRefreshed = false
+        session.refreshCanvasPreview = { previewRefreshed = true }
+
+        session.addTextLayer(at: CGPoint(x: 50, y: 50), content: "Live Text")
+        previewRefreshed = false
+
+        session.updateActiveText(registerUndo: false) {
+            $0.fontSize = 72
+            $0.strokeWidth = 4
+            $0.strokePosition = .outside
+        }
+
+        #expect(previewRefreshed)
+        #expect(session.activeLayer?.liveText?.style.fontSize == 72)
+        #expect(session.activeLayer?.liveText?.style.strokeWidth == 4)
+        #expect(session.activeLayer?.liveText?.style.strokePosition == .outside)
+    }
 }
