@@ -25,6 +25,7 @@ final class CanvasView: NSView {
     private let sampleRing = SampleRingOverlay()
     private var samplingOriginal = PaletteColor.black
     let session: EditorSession
+    private var inlineEditor: CanvasInlineTextView?
     private var spaceHeld = false
     private var brushPointer: CGPoint?
     /// The layer being drawn into a surface for SeparableBlend, which draws it plainly and blends it afterwards.
@@ -486,7 +487,57 @@ final class CanvasView: NSView {
         _ = session.activeLayerID
         _ = session.cropRect
         transformOverlay.needsDisplay = true
+        synchronizeInlineEditor()
         return changed
+    }
+
+    func synchronizeInlineEditor() {
+        guard let editingID = session.textEditingLayerID,
+              let document = session.document,
+              let layer = document.layers.first(where: { $0.id == editingID }),
+              layer.liveText != nil else {
+            if inlineEditor != nil {
+                inlineEditor?.removeFromSuperview()
+                inlineEditor = nil
+            }
+            return
+        }
+
+        if inlineEditor == nil || inlineEditor?.layerID != editingID {
+            inlineEditor?.removeFromSuperview()
+            let editor = CanvasInlineTextView(session: session, canvasView: self, layerID: editingID)
+            addSubview(editor)
+            inlineEditor = editor
+            editor.updateStylesAndText()
+            editor.selectAll(nil)
+            DispatchQueue.main.async { [weak self, weak editor] in
+                guard let self, let editor, let window = self.window else { return }
+                window.makeFirstResponder(editor)
+            }
+        } else {
+            inlineEditor?.updateStylesAndText()
+        }
+
+        updateInlineEditorGeometry()
+    }
+
+    func updateInlineEditorGeometry() {
+        guard let inlineEditor,
+              let editingID = inlineEditor.layerID,
+              let document = session.document,
+              let layer = document.layers.first(where: { $0.id == editingID }) else { return }
+
+        let viewOrigin = session.viewport.viewPoint(from: layer.origin, documentSize: document.size)
+        let scale = session.viewport.pointsPerPixel
+        let layerW = max(120, layer.size.width * scale)
+        let layerH = max(36, layer.size.height * scale)
+        let frame = CGRect(x: (viewOrigin.x - 8).rounded(),
+                           y: (viewOrigin.y - 6).rounded(),
+                           width: (layerW + 16).rounded(),
+                           height: (layerH + 12).rounded())
+        if inlineEditor.frame != frame {
+            inlineEditor.frame = frame
+        }
     }
 
     init(session: EditorSession) {
@@ -520,6 +571,7 @@ final class CanvasView: NSView {
         super.layout()
         transformOverlay.frame = bounds
         brushCursor.frame = bounds
+        updateInlineEditorGeometry()
         syncGeometry()
     }
     override func viewDidMoveToWindow() {
@@ -1190,6 +1242,18 @@ final class CanvasView: NSView {
             }
             return
         }
+        if event.clickCount >= 2, !spaceHeld, let document = session.document {
+            let docPoint = session.viewport.documentPoint(from: point, documentSize: document.size)
+            let matchingLayers = Array(document.layers.reversed())
+            if let clickedTextLayer = matchingLayers.first(where: { $0.liveText != nil && $0.transform.contains(docPoint) }) {
+                if session.tool != .text {
+                    session.selectTool(.text)
+                }
+                session.beginTextEdit(layerID: clickedTextLayer.id)
+                synchronizeDisplay()
+                return
+            }
+        }
         if session.hueTargeting, !spaceHeld, let document = session.document {
             if session.beginHueTargeting(at: session.viewport.documentPoint(from: point, documentSize: document.size)) {
                 hueTargetStart = point
@@ -1231,14 +1295,22 @@ final class CanvasView: NSView {
         } else if session.tool == .text, let document = session.document {
             let docPoint = session.viewport.documentPoint(from: point, documentSize: document.size)
             let matchingLayers = Array(document.layers.reversed())
+            if session.isEditingText {
+                if let editingID = session.textEditingLayerID,
+                   let layer = document.layers.first(where: { $0.id == editingID }),
+                   layer.transform.contains(docPoint) {
+                    return
+                }
+                session.endTextEdit()
+            }
             if let clickedLayer = matchingLayers.first(where: { layer in
                 layer.liveText != nil && layer.transform.contains(docPoint)
             }) {
-                session.selectLayer(clickedLayer.id)
-                session.loadTextStyleFromActiveLayer()
+                session.beginTextEdit(layerID: clickedLayer.id)
             } else {
                 session.addTextLayer(at: docPoint)
             }
+            synchronizeDisplay()
         } else if session.tool == .crop {
             beginCropDrag(at: point)
         } else if session.tool == .move {
@@ -1825,3 +1897,83 @@ final class CanvasView: NSView {
         }
     }
 }
+
+final class CanvasInlineTextView: NSTextView, NSTextViewDelegate {
+    weak var session: EditorSession?
+    weak var canvasView: CanvasView?
+    var layerID: UUID?
+    private var isSyncing = false
+
+    init(session: EditorSession, canvasView: CanvasView, layerID: UUID) {
+        self.session = session
+        self.canvasView = canvasView
+        self.layerID = layerID
+        let textStorage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        textStorage.addLayoutManager(layoutManager)
+        let textContainer = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
+        textContainer.widthTracksTextView = false
+        textContainer.heightTracksTextView = false
+        layoutManager.addTextContainer(textContainer)
+
+        super.init(frame: .zero, textContainer: textContainer)
+        self.delegate = self
+        self.isRichText = false
+        self.drawsBackground = true
+        self.backgroundColor = NSColor(white: 0.12, alpha: 0.90)
+        self.insertionPointColor = .white
+        self.isVerticallyResizable = true
+        self.isHorizontallyResizable = true
+        self.autoresizingMask = []
+        self.textContainerInset = NSSize(width: 8, height: 6)
+        self.wantsLayer = true
+        self.layer?.cornerRadius = 4
+        self.layer?.borderWidth = 1.5
+        self.layer?.borderColor = NSColor.controlAccentColor.cgColor
+        self.layer?.shadowColor = NSColor.black.cgColor
+        self.layer?.shadowOpacity = 0.5
+        self.layer?.shadowRadius = 4
+        self.layer?.shadowOffset = CGSize(width: 0, height: -2)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func updateStylesAndText() {
+        guard let session, let layer = session.document?.layers.first(where: { $0.id == layerID }), let text = layer.liveText else { return }
+        isSyncing = true
+        let style = text.style
+        if self.string != style.text {
+            self.string = style.text
+        }
+        let scale = session.viewport.pointsPerPixel
+        let fontSize = max(8, style.fontSize * scale)
+        let font = FontHelper.font(family: style.fontFamily, style: style.fontStyle, size: fontSize)
+        self.font = font
+        self.textColor = NSColor(srgbRed: style.red, green: style.green, blue: style.blue, alpha: 1.0)
+        self.alignment = style.alignment.nsTextAlignment
+        isSyncing = false
+    }
+
+    func textDidChange(_ notification: Notification) {
+        guard !isSyncing, let session else { return }
+        let newString = self.string
+        session.textContent = newString
+        session.updateActiveText(registerUndo: false) { $0.text = newString }
+        canvasView?.updateInlineEditorGeometry()
+    }
+
+    override func doCommand(by selector: Selector) {
+        if selector == #selector(cancelOperation(_:)) {
+            session?.endTextEdit()
+            canvasView?.window?.makeFirstResponder(canvasView)
+            return
+        }
+        if selector == #selector(insertNewline(_:)) && NSEvent.modifierFlags.contains(.command) {
+            session?.endTextEdit()
+            canvasView?.window?.makeFirstResponder(canvasView)
+            return
+        }
+        super.doCommand(by: selector)
+    }
+}
+

@@ -231,6 +231,8 @@ final class EditorSession {
     var textUnderline: Bool = false
     var textStrikethrough: Bool = false
     var textAlignment: LayerTextAlignment = .left
+    var textEditingLayerID: UUID?
+    var isEditingText: Bool { textEditingLayerID != nil }
     var selectionModeChoice = SelectionMode.replace
     /// Mode implied by the Shift/Option keys currently held, nil when neither is.
     var heldSelectionMode: SelectionMode?
@@ -299,12 +301,12 @@ final class EditorSession {
     }
     func selectLayer(_ id: UUID?) {
         guard brushStroke == nil, warpStroke == nil, levels == nil else { return }
-        if id != activeLayerID { commitTransform(); resolveGradient() }
+        if id != activeLayerID { commitTransform(); resolveGradient(); endTextEdit() }
         activeLayerID = id
     }
     func selectTool(_ value: NavigationTool) {
         guard !isProjectBusy, brushStroke == nil, warpStroke == nil, levels == nil else { return }
-        if tool != value { commitTransform(); cancelCrop(); resolveGradient(); cancelLasso(); cancelShape() }
+        if tool != value { commitTransform(); cancelCrop(); resolveGradient(); cancelLasso(); cancelShape(); endTextEdit() }
         let from = Self.tipFamily(tool), to = Self.tipFamily(value)
         if from != to, let parked = parkedBrushTips[to] {
             parkedBrushTips[from] = (brushSettings.diameter, brushSettings.hardness, brushSettings.opacity)
@@ -486,6 +488,7 @@ final class EditorSession {
     private func restore(_ snapshot: DocumentHistory.Snapshot) {
         cancelCrop()
         cancelGradient()
+        endTextEdit(commitUndo: false)
         let changedCanvas = document?.id != snapshot.document?.id
         let keepMaskTarget = isMaskSelected && activeLayerID == snapshot.activeLayerID
         document = snapshot.document

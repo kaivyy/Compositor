@@ -70,6 +70,74 @@ import AppKit
         #expect(result.size.height > 0)
     }
 
+    @Test func textRasterOrientationIsRightSideUpAndLeftToRight() throws {
+        var style = LayerTextStyle()
+        style.text = "L"
+        style.fontFamily = "Helvetica"
+        style.fontStyle = "Regular"
+        style.fontSize = 60
+        style.red = 1
+        style.green = 0
+        style.blue = 0
+        style.alpha = 1
+
+        let (image, _) = try EditorSession.textImage(for: style)
+        let w = image.width
+        let h = image.height
+        #expect(w > 20 && h > 20)
+
+        // Read RGBA pixels
+        guard let data = image.dataProvider?.data,
+              let ptr = CFDataGetBytePtr(data) else {
+            Issue.record("Failed to get pixel data from text image")
+            return
+        }
+
+        func alphaAt(x: Int, y: Int) -> UInt8 {
+            guard x >= 0, x < w, y >= 0, y < h else { return 0 }
+            let offset = (y * w + x) * 4
+            return ptr[offset + 3] // Alpha channel
+        }
+
+        // Letter "L":
+        // 1) Upper-left area (top of stem): should have opaque pixels
+        // 2) Upper-right area: should be transparent (no top horizontal stroke)
+        // 3) Lower-right area (foot of L): should have opaque pixels
+        let midY = h / 2
+        let topY = 12
+        let bottomY = h - 12
+        let leftX = 12
+        let rightX = w - 12
+
+        var hasTopLeft = false
+        var hasTopRight = false
+        var hasBottomRight = false
+        var hasBottomLeft = false
+
+        for y in 8..<midY {
+            for x in 8..<(w / 2) {
+                if alphaAt(x: x, y: y) > 100 { hasTopLeft = true }
+            }
+            for x in (w / 2)..<(w - 8) {
+                if alphaAt(x: x, y: y) > 100 { hasTopRight = true }
+            }
+        }
+
+        for y in midY..<(h - 8) {
+            for x in 8..<(w / 2) {
+                if alphaAt(x: x, y: y) > 100 { hasBottomLeft = true }
+            }
+            for x in (w / 2)..<(w - 8) {
+                if alphaAt(x: x, y: y) > 100 { hasBottomRight = true }
+            }
+        }
+
+        #expect(hasTopLeft, "Top of stem should be present")
+        #expect(!hasTopRight, "Top right of 'L' should be empty (not upside down)")
+        #expect(hasBottomLeft, "Corner of 'L' should be present")
+        #expect(hasBottomRight, "Foot of 'L' should be present on bottom right (not mirrored or upside down)")
+    }
+
     @Test func addTextLayerCreatesLayerAndRegistersUndo() throws {
         let session = EditorSession()
         session.createDocument(width: 800, height: 600)
@@ -136,4 +204,28 @@ import AppKit
         #expect(loadedLayer.liveText?.style.text == "Persistent Title")
         #expect(loadedLayer.liveText?.style.fontSize == 40)
     }
+
+    @Test func inlineTextEditingLifecycle() throws {
+        let session = EditorSession()
+        session.createDocument(width: 800, height: 600)
+        session.addTextLayer(at: CGPoint(x: 100, y: 100), content: "Interactive Layer")
+
+        let layer = try #require(session.activeLayer)
+        #expect(session.isEditingText)
+        #expect(session.textEditingLayerID == layer.id)
+
+        session.endTextEdit()
+        #expect(!session.isEditingText)
+        #expect(session.textEditingLayerID == nil)
+
+        session.beginTextEdit(layerID: layer.id)
+        #expect(session.isEditingText)
+        #expect(session.textEditingLayerID == layer.id)
+        #expect(session.textContent == "Interactive Layer")
+
+        session.selectTool(.brush)
+        #expect(!session.isEditingText)
+        #expect(session.textEditingLayerID == nil)
+    }
 }
+

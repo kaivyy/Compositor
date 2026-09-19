@@ -217,13 +217,13 @@ extension EditorSession {
         let context = try BrushRaster.context(width: scaledW, height: scaledH, mask: false)
 
         NSGraphicsContext.saveGraphicsState()
-        let nsContext = NSGraphicsContext(cgContext: context, flipped: false)
+        let nsContext = NSGraphicsContext(cgContext: context, flipped: true)
         NSGraphicsContext.current = nsContext
 
         context.saveGState()
         context.scaleBy(x: hScale, y: vScale)
 
-        let drawRect = CGRect(x: padX - bounds.minX, y: padY - bounds.minY, width: ceil(bounds.width), height: ceil(bounds.height))
+        let drawRect = CGRect(x: (padX - bounds.minX) / hScale, y: (padY - bounds.minY) / vScale, width: ceil(bounds.width), height: ceil(bounds.height))
         attrString.draw(with: drawRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
 
         context.restoreGState()
@@ -291,7 +291,28 @@ extension EditorSession {
         foregroundColor = style.color
     }
 
-    /// Adds a new text layer at `point` in document coordinates.
+    /// Begins inline canvas editing for the text layer with `layerID`.
+    func beginTextEdit(layerID: UUID) {
+        guard canEditLayers, let layer = document?.layers.first(where: { $0.id == layerID }), layer.liveText != nil else { return }
+        if textEditingLayerID != layerID {
+            endTextEdit(commitUndo: false)
+        }
+        selectLayer(layerID)
+        loadTextStyleFromActiveLayer()
+        textEditingLayerID = layerID
+    }
+
+    /// Ends inline text editing, optionally committing an undo transaction if edits occurred.
+    func endTextEdit(commitUndo: Bool = true) {
+        guard textEditingLayerID != nil else { return }
+        textEditingLayerID = nil
+        if commitUndo {
+            beginEdit("Type Edit")
+            endEdit()
+        }
+    }
+
+    /// Adds a new text layer at `point` in document coordinates and starts inline editing.
     func addTextLayer(at point: CGPoint, content: String? = nil) {
         guard canEditLayers, document != nil else { return }
         let textString = content ?? (textContent.isEmpty ? "Sample Text" : textContent)
@@ -307,6 +328,9 @@ extension EditorSession {
             addPixelLayer(rendered.image, at: origin, name: name, editName: "Type Tool",
                           dropsSelection: false, text: LayerText(style: style, image: rendered.image))
             textContent = textString
+            if let activeID = activeLayerID {
+                beginTextEdit(layerID: activeID)
+            }
         } catch {
             brushError = error.localizedDescription
         }
