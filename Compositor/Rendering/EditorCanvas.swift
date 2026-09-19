@@ -550,14 +550,15 @@ final class CanvasView: NSView {
                            width: layerW.rounded(),
                            height: layerH.rounded())
 
+        let targetRotation = layer.transform.rotation.truncatingRemainder(dividingBy: 360)
         if inlineEditor.frameCenterRotation != 0 {
             inlineEditor.frameCenterRotation = 0
         }
         if inlineEditor.frame != frame {
             inlineEditor.frame = frame
         }
-        if layer.transform.rotation != 0 {
-            inlineEditor.frameCenterRotation = -layer.transform.rotation
+        if targetRotation != 0 {
+            inlineEditor.frameCenterRotation = targetRotation
         }
     }
 
