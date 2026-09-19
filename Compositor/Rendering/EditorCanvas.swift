@@ -510,7 +510,12 @@ final class CanvasView: NSView {
             addSubview(editor)
             inlineEditor = editor
             editor.updateStylesAndText()
-            editor.selectAll(nil)
+            let isNew = session.textEditIsNewLayer
+            if isNew || editor.string.isEmpty {
+                editor.setSelectedRange(NSRange(location: 0, length: 0))
+            } else {
+                editor.setSelectedRange(NSRange(location: editor.string.count, length: 0))
+            }
             DispatchQueue.main.async { [weak self, weak editor] in
                 guard let self, let editor, let window = self.window else { return }
                 window.makeFirstResponder(editor)
@@ -531,8 +536,11 @@ final class CanvasView: NSView {
 
         let viewOrigin = session.viewport.viewPoint(from: layer.origin, documentSize: document.size)
         let scale = session.viewport.pointsPerPixel
-        let layerW = max(30, layer.size.width * scale)
-        let layerH = max(20, layer.size.height * scale)
+        let fontSize = layer.liveText?.style.fontSize ?? 36
+        let minW = fontSize * 3 * scale
+        let minH = fontSize * 1.3 * scale
+        let layerW = max(140, max(layer.size.width * scale, minW))
+        let layerH = max(28, max(layer.size.height * scale, minH))
         let frame = CGRect(x: viewOrigin.x.rounded(),
                            y: viewOrigin.y.rounded(),
                            width: layerW.rounded(),
@@ -1963,6 +1971,35 @@ final class CanvasInlineTextView: NSTextView, NSTextViewDelegate {
         session.textContent = newString
         session.updateActiveText(registerUndo: false) { $0.text = newString }
         canvasView?.updateInlineEditorGeometry()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        // Cmd+Return (keyCode 36) or Cmd+Enter (keyCode 76) or Keypad Enter (keyCode 76)
+        if event.keyCode == 76 || (event.keyCode == 36 && event.modifierFlags.contains(.command)) {
+            session?.commitTextEdit()
+            canvasView?.window?.makeFirstResponder(canvasView)
+            return
+        }
+        if event.keyCode == 53 { // Escape
+            session?.cancelTextEdit()
+            canvasView?.window?.makeFirstResponder(canvasView)
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.keyCode == 76 || (event.keyCode == 36 && event.modifierFlags.contains(.command)) {
+            session?.commitTextEdit()
+            canvasView?.window?.makeFirstResponder(canvasView)
+            return true
+        }
+        if event.keyCode == 53 {
+            session?.cancelTextEdit()
+            canvasView?.window?.makeFirstResponder(canvasView)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 
     override func doCommand(by selector: Selector) {

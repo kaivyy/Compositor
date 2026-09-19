@@ -490,7 +490,9 @@ final class EditorSession {
     private func restore(_ snapshot: DocumentHistory.Snapshot) {
         cancelCrop()
         cancelGradient()
-        endTextEdit(commitUndo: false)
+        textEditingLayerID = nil
+        initialEditingText = nil
+        textEditIsNewLayer = false
         let changedCanvas = document?.id != snapshot.document?.id
         let keepMaskTarget = isMaskSelected && activeLayerID == snapshot.activeLayerID
         document = snapshot.document

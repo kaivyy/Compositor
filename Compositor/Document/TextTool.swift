@@ -189,18 +189,26 @@ nonisolated enum FontHelper {
 extension EditorSession {
     /// Text raster generation: creates a crisp CGImage of the rendered attributed text.
     static func textImage(for style: LayerTextStyle) throws -> (image: CGImage, size: CGSize) {
+        let hScale = max(0.1, style.horizontalScale / 100.0)
+        let vScale = max(0.1, style.verticalScale / 100.0)
+        let defaultW = max(1, Int(ceil(max(120, style.fontSize * 3) * hScale)))
+        let defaultH = max(1, Int(ceil(max(32, style.fontSize * 1.3) * vScale)))
+
+        if style.text.isEmpty {
+            let context = try BrushRaster.context(width: defaultW, height: defaultH, mask: false)
+            guard let image = context.makeImage() else { throw ExportError.render }
+            return (image, CGSize(width: CGFloat(defaultW), height: CGFloat(defaultH)))
+        }
+
         let attrString = style.makeAttributedString()
         guard attrString.length > 0 else {
-            let context = try BrushRaster.context(width: 1, height: 1, mask: false)
+            let context = try BrushRaster.context(width: defaultW, height: defaultH, mask: false)
             guard let image = context.makeImage() else { throw ExportError.render }
-            return (image, CGSize(width: 1, height: 1))
+            return (image, CGSize(width: CGFloat(defaultW), height: CGFloat(defaultH)))
         }
 
         let bounds = attrString.boundingRect(with: CGSize(width: 10_000, height: 10_000),
                                              options: [.usesLineFragmentOrigin, .usesFontLeading])
-
-        let hScale = max(0.1, style.horizontalScale / 100.0)
-        let vScale = max(0.1, style.verticalScale / 100.0)
 
         let padX: CGFloat = 8.0
         let padY: CGFloat = 8.0
@@ -347,7 +355,7 @@ extension EditorSession {
     /// Adds a new text layer at `point` in document coordinates and starts inline editing.
     func addTextLayer(at point: CGPoint, content: String? = nil) {
         guard canEditLayers, document != nil else { return }
-        let textString = content ?? (textContent.isEmpty ? "Sample Text" : textContent)
+        let textString = content ?? textContent
         var style = currentTextStyle(overrideText: textString)
         style.red = foregroundColor.red
         style.green = foregroundColor.green

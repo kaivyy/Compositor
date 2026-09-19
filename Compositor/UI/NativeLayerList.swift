@@ -53,6 +53,20 @@ struct NativeLayerList: NSViewRepresentable {
         private var synchronizing = false
         init(session: EditorSession) { self.session = session }
 
+        @discardableResult
+        func moveLayer(_ id: UUID, to row: Int) -> Bool {
+            guard !session.isImporting, session.canEditLayers else { return false }
+            let current = session.layerRows
+            guard current.contains(where: { $0.layer.id == id }) else { return false }
+            guard row >= 0, row <= current.count else { return false }
+            if row >= current.count {
+                return session.placeLayer(id, in: nil, above: nil, atBottom: true)
+            } else {
+                let target = current[row].layer
+                return session.placeLayer(id, in: target.parentID, above: target.id, atBottom: false)
+            }
+        }
+
         func update(_ table: NSTableView) {
             let entries = session.layerRows
             let byID = Dictionary(uniqueKeysWithValues: (session.document?.layers ?? []).map { ($0.id, $0) })

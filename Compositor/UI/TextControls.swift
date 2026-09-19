@@ -11,8 +11,8 @@ struct TextControls: View {
         HStack(spacing: 12) {
             Text("Type").font(ToolHeaderStyle.titleFont)
 
-            // Font Family Picker
-            Picker("Font Family", selection: Binding(
+            // Searchable Font Family Picker
+            SearchableFontPicker(selectedFamily: Binding(
                 get: { session.textFontFamily },
                 set: { newFamily in
                     session.textFontFamily = newFamily
@@ -27,14 +27,9 @@ struct TextControls: View {
                         }
                     }
                 }
-            )) {
-                ForEach(FontHelper.availableFamilies, id: \.self) { family in
-                    Text(family).tag(family)
-                }
-            }
-            .frame(width: 130)
-            .labelsHidden()
-            .help("Font family")
+            ))
+            .frame(width: 140)
+            .help("Font family; click to search and select")
 
             // Font Style / Weight Picker
             Picker("Font Style", selection: Binding(
@@ -235,7 +230,7 @@ struct CharacterParagraphPanel: View {
         VStack(spacing: 8) {
             // Font Family & Style pickers
             HStack(spacing: 6) {
-                Picker("Family", selection: Binding(
+                SearchableFontPicker(selectedFamily: Binding(
                     get: { session.textFontFamily },
                     set: { newFamily in
                         session.textFontFamily = newFamily
@@ -250,12 +245,7 @@ struct CharacterParagraphPanel: View {
                             }
                         }
                     }
-                )) {
-                    ForEach(FontHelper.availableFamilies, id: \.self) { family in
-                        Text(family).tag(family)
-                    }
-                }
-                .labelsHidden()
+                ))
                 .frame(maxWidth: .infinity)
 
                 Picker("Style", selection: Binding(
@@ -550,3 +540,112 @@ struct CharacterParagraphPanel: View {
         .help(tooltip)
     }
 }
+
+/// Searchable Font Family Picker popover that filters available system font families in real-time.
+struct SearchableFontPicker: View {
+    @Binding var selectedFamily: String
+    var onSelect: ((String) -> Void)?
+
+    @State private var isPresented = false
+    @State private var searchQuery = ""
+
+    private var filteredFamilies: [String] {
+        let all = FontHelper.availableFamilies
+        let query = searchQuery.trimmingCharacters(in: .whitespaces)
+        if query.isEmpty {
+            return all
+        }
+        return all.filter { $0.localizedCaseInsensitiveContains(query) }
+    }
+
+    var body: some View {
+        Button {
+            isPresented.toggle()
+        } label: {
+            HStack(spacing: 4) {
+                Text(selectedFamily)
+                    .font(.system(size: 12))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, minHeight: 20, maxHeight: 22)
+            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
+            .overlay {
+                RoundedRectangle(cornerRadius: 5)
+                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            VStack(spacing: 6) {
+                // Search field
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                        .font(.system(size: 11))
+                    TextField("Search fonts...", text: $searchQuery)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                    if !searchQuery.isEmpty {
+                        Button {
+                            searchQuery = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                                .font(.system(size: 11))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
+
+                Divider()
+
+                // List of filtered fonts
+                ScrollView {
+                    LazyVStack(spacing: 1) {
+                        ForEach(filteredFamilies, id: \.self) { family in
+                            Button {
+                                selectedFamily = family
+                                isPresented = false
+                                onSelect?(family)
+                            } label: {
+                                HStack {
+                                    Text(family)
+                                        .font(.custom(family, size: 13, relativeTo: .body))
+                                        .lineLimit(1)
+                                    Spacer()
+                                    if family == selectedFamily {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 10, weight: .bold))
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                                .background(family == selectedFamily ? Color.accentColor.opacity(0.2) : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .frame(width: 220, height: 260)
+            }
+            .padding(8)
+            .onAppear {
+                searchQuery = ""
+            }
+        }
+    }
+}
+
