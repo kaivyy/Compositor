@@ -518,7 +518,18 @@ extension EditorSession {
 
             var updatedLayer = layer
             updatedLayer.asset = ImportedImage(image: rendered.image, thumbnail: thumbnail, name: layer.name)
-            updatedLayer.transform = LayerTransform(origin: layer.origin, size: rendered.size)
+            var newTransform = layer.transform
+            let oldSize = layer.transform.size
+            let newSize = rendered.size
+            if oldSize != newSize {
+                let radians = layer.transform.radians
+                let p0 = layer.transform.point(CGPoint(x: 0, y: 0))
+                let newCenterX = p0.x + (newSize.width / 2) * cos(radians) - (newSize.height / 2) * sin(radians)
+                let newCenterY = p0.y + (newSize.width / 2) * sin(radians) + (newSize.height / 2) * cos(radians)
+                newTransform.size = newSize
+                newTransform.origin = CGPoint(x: newCenterX - newSize.width / 2, y: newCenterY - newSize.height / 2)
+            }
+            updatedLayer.transform = newTransform
             updatedLayer.text = LayerText(style: newStyle, image: rendered.image)
             document?.layers[index] = updatedLayer
 

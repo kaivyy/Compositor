@@ -338,4 +338,51 @@ import AppKit
         #expect(session.activeLayer?.liveText?.style.strokeWidth == 4)
         #expect(session.activeLayer?.liveText?.style.strokePosition == .outside)
     }
+
+    @Test func rotatedTextPreservesRotationWhenEdited() throws {
+        let session = EditorSession()
+        session.createDocument(width: 800, height: 600)
+        session.addTextLayer(at: CGPoint(x: 100, y: 100), content: "Rotated Text")
+        session.commitTextEdit()
+
+        guard let layerID = session.activeLayerID,
+              let index = session.document?.layers.firstIndex(where: { $0.id == layerID }) else {
+            Issue.record("Missing text layer")
+            return
+        }
+
+        // Rotate the layer to 45 degrees
+        session.document?.layers[index].transform.rotation = 45
+        #expect(session.activeLayer?.transform.rotation == 45)
+
+        // Edit the text
+        session.beginTextEdit(layerID: layerID)
+        session.updateActiveText(registerUndo: false) {
+            $0.text = "Rotated Text Updated With More Words"
+        }
+        session.commitTextEdit()
+
+        #expect(session.activeLayer?.transform.rotation == 45)
+        #expect(session.activeLayer?.liveText?.style.text == "Rotated Text Updated With More Words")
+    }
+
+    @Test func textRenderingInNarrowBoundsDoesNotDropWords() throws {
+        var style = LayerTextStyle()
+        style.text = "First Second Third Fourth"
+        style.fontSize = 36
+        let (image, size) = try EditorSession.textImage(for: style)
+        let layerText = LayerText(style: style, image: image)
+
+        // Render into a narrow transform box (narrower than a single word)
+        let narrowTransform = LayerTransform(origin: CGPoint(x: 50, y: 50), size: CGSize(width: 30, height: 40))
+        let context = try BrushRaster.context(width: 200, height: 200, mask: false)
+        LayerRenderer.drawText(layerText, transform: narrowTransform, center: CGPoint(x: 100, y: 100), in: context)
+
+        guard let rendered = context.makeImage() else {
+            Issue.record("Failed to make image from context")
+            return
+        }
+        #expect(rendered.width == 200)
+        #expect(rendered.height == 200)
+    }
 }

@@ -51,13 +51,18 @@ nonisolated enum LayerRenderer {
         context.rotate(by: transform.radians)
         context.scaleBy(x: transform.flipX ? -1 : 1, y: transform.flipY ? -1 : 1)
         let bounds = CGRect(x: -width / 2, y: -height / 2, width: width, height: height)
+        context.clip(to: bounds)
         if let clip { context.clip(to: coverage(of: clip, in: bounds), mask: clip.image) }
 
         let style = text.style
         let extraPad = max(0, style.strokeWidth * (style.strokePosition == .outside ? 2 : 1)) * scale
         let padX = (8.0 * scale) + extraPad
         let padY = (8.0 * scale) + extraPad
-        let drawRect = CGRect(x: bounds.minX + padX, y: bounds.minY + padY, width: max(0, width - padX * 2), height: max(0, height - padY * 2))
+
+        let fillAttr = style.makeAttributedString(scale: scale, forStroke: false)
+        let textBounds = fillAttr.boundingRect(with: CGSize(width: 100_000, height: 100_000), options: [.usesLineFragmentOrigin, .usesFontLeading])
+        let naturalW = ceil(textBounds.width) + 4
+        let naturalH = ceil(textBounds.height) + 4
 
         NSGraphicsContext.saveGraphicsState()
         let nsContext = NSGraphicsContext(cgContext: context, flipped: true)
@@ -70,14 +75,15 @@ nonisolated enum LayerRenderer {
         let vScale = max(0.1, style.verticalScale / 100.0)
         context.scaleBy(x: hScale, y: vScale)
 
-        let targetRect = CGRect(x: drawRect.minX / hScale, y: drawRect.minY / vScale, width: drawRect.width / hScale, height: drawRect.height / vScale)
+        let originX = (-width / 2 + padX - textBounds.minX) / hScale
+        let originY = (-height / 2 + padY - textBounds.minY) / vScale
+        let targetRect = CGRect(x: originX, y: originY, width: max(naturalW, width) / hScale, height: max(naturalH, height) / vScale)
 
         if style.strokeWidth > 0 && style.strokePosition == .outside {
             let strokeAttr = style.makeAttributedString(scale: scale, forStroke: true)
             strokeAttr.draw(with: targetRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
         }
 
-        let fillAttr = style.makeAttributedString(scale: scale, forStroke: false)
         fillAttr.draw(with: targetRect, options: [.usesLineFragmentOrigin, .usesFontLeading])
 
         context.restoreGState()

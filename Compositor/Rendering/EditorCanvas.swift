@@ -535,7 +535,6 @@ final class CanvasView: NSView {
               let document = session.document,
               let layer = document.layers.first(where: { $0.id == editingID }) else { return }
 
-        let viewOrigin = session.viewport.viewPoint(from: layer.origin, documentSize: document.size)
         let scale = session.viewport.pointsPerPixel
         let fontSize = layer.liveText?.style.fontSize ?? 36
         let strokeMultiplier: CGFloat = layer.liveText?.style.strokePosition == .outside ? 2 : 1
@@ -544,12 +543,21 @@ final class CanvasView: NSView {
         let minH = fontSize * 1.3 * scale
         let layerW = max(140, max(layer.size.width * scale, minW) + strokePad * 2)
         let layerH = max(28, max(layer.size.height * scale, minH) + strokePad * 2)
-        let frame = CGRect(x: viewOrigin.x.rounded(),
-                           y: viewOrigin.y.rounded(),
+
+        let viewCenter = session.viewport.viewPoint(from: layer.transform.center, documentSize: document.size)
+        let frame = CGRect(x: (viewCenter.x - layerW / 2).rounded(),
+                           y: (viewCenter.y - layerH / 2).rounded(),
                            width: layerW.rounded(),
                            height: layerH.rounded())
+
+        if inlineEditor.frameCenterRotation != 0 {
+            inlineEditor.frameCenterRotation = 0
+        }
         if inlineEditor.frame != frame {
             inlineEditor.frame = frame
+        }
+        if layer.transform.rotation != 0 {
+            inlineEditor.frameCenterRotation = -layer.transform.rotation
         }
     }
 
@@ -855,8 +863,10 @@ final class CanvasView: NSView {
                     opacity: layer.opacity, blendMode: blendMode(of: layer),
                     mask: mask, in: context)
             } else if stroke == nil, let liveText = layer.liveText, session.filterEdit?.previewImage(for: layer.id) == nil && session.levels?.previewImage(for: layer.id) == nil && session.hueSaturation?.previewImage(for: layer.id) == nil {
-                LayerRenderer.drawText(liveText, transform: transform, center: center(transform.center), scale: scale,
-                    opacity: layer.opacity, blendMode: blendMode(of: layer), mask: mask, in: context)
+                if session.textEditingLayerID != layer.id {
+                    LayerRenderer.drawText(liveText, transform: transform, center: center(transform.center), scale: scale,
+                        opacity: layer.opacity, blendMode: blendMode(of: layer), mask: mask, in: context)
+                }
             } else if let image = session.filterEdit?.previewImage(for: layer.id) ?? session.levels?.previewImage(for: layer.id) ?? session.hueSaturation?.previewImage(for: layer.id) ?? layer.asset?.image {
                 // LayerRenderer picks a sharp reduction for the image and its mask itself.
                 LayerRenderer.draw(image, transform: transform,
