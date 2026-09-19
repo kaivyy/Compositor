@@ -934,6 +934,7 @@ final class CanvasView: NSView {
             // The Move tool's cursor depends on the pointer (handles, Option to duplicate), so match it here.
             : session.tool == .move ? window.map { transformCursor(at: convert($0.mouseLocationOutsideOfEventStream, from: nil)) } ?? .arrow
             : session.tool == .idle ? .arrow
+            : session.tool == .text ? .iBeam
             : session.tool == .zoom ? (optionHeld ? Self.zoomOutCursor : Self.zoomInCursor)
             : .crosshair
         addCursorRect(bounds, cursor: cursor)
@@ -1227,6 +1228,17 @@ final class CanvasView: NSView {
             beginGradientDrag(at: point)
         } else if session.tool == .shape, let document = session.document {
             session.beginShape(at: session.viewport.documentPoint(from: point, documentSize: document.size))
+        } else if session.tool == .text, let document = session.document {
+            let docPoint = session.viewport.documentPoint(from: point, documentSize: document.size)
+            let matchingLayers = Array(document.layers.reversed())
+            if let clickedLayer = matchingLayers.first(where: { layer in
+                layer.liveText != nil && layer.transform.contains(docPoint)
+            }) {
+                session.selectLayer(clickedLayer.id)
+                session.loadTextStyleFromActiveLayer()
+            } else {
+                session.addTextLayer(at: docPoint)
+            }
         } else if session.tool == .crop {
             beginCropDrag(at: point)
         } else if session.tool == .move {
@@ -1530,6 +1542,7 @@ final class CanvasView: NSView {
             case "u":
                 if event.modifierFlags.contains(.shift), session.tool == .shape { session.toggleShapeKind() }
                 else { session.selectTool(.shape) }
+            case "t": session.selectTool(.text)
             case "i": session.selectTool(.eyedropper)
             // M (Shift or not) chooses the Marquee, then switches Rectangle/Ellipse; holding it doesn't flicker.
             case "m": if !event.isARepeat { session.pressMarqueeKey(); refreshLassoCursor() }
