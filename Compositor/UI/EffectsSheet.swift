@@ -34,11 +34,12 @@ struct EffectsSheet: View {
             Text("Stroke").font(.headline)
             Spacer()
             if let effect {
-                Picker("Position", selection: Binding(get: { effect.inside }, set: { inside in
-                    session.changeEffects { $0.stroke?.inside = inside }
+                Picker("Position", selection: Binding(get: { effect.position }, set: { position in
+                    session.changeEffects { $0.stroke?.position = position }
                 })) {
-                    Text("Outside").tag(false)
-                    Text("Inside").tag(true)
+                    Text("Outside").tag(StrokePosition.outside)
+                    Text("Center").tag(StrokePosition.center)
+                    Text("Inside").tag(StrokePosition.inside)
                 }.pickerStyle(.segmented).labelsHidden().fixedSize()
             }
         }

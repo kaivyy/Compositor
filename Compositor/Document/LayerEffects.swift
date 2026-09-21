@@ -2,7 +2,14 @@ import AppKit
 import CoreGraphics
 import CoreImage
 
-/// A line drawn around what the layer shows, outside its edge or inside it.
+/// Alignment of a stroke relative to the layer's outline boundary.
+nonisolated enum StrokePosition: String, Codable, CaseIterable, Sendable {
+    case outside
+    case center
+    case inside
+}
+
+/// A line drawn around what the layer shows, outside its edge, inside it, or centered on it.
 nonisolated struct StrokeEffect: Codable, Equatable, Sendable {
     /// Supported document-pixel width; preview work is bounded independently of this value.
     static let maxSize: CGFloat = 500
@@ -13,11 +20,68 @@ nonisolated struct StrokeEffect: Codable, Equatable, Sendable {
     var green: CGFloat = 0
     var blue: CGFloat = 0
     var opacity: Double = 1
-    var inside = false
+    var position: StrokePosition = .outside
+    var inside: Bool {
+        get { position == .inside }
+        set { position = newValue ? .inside : .outside }
+    }
     var color: PaletteColor { PaletteColor(red: red, green: green, blue: blue) }
     var isValid: Bool {
         size.isFinite && (0...StrokeEffect.maxSize).contains(size) && opacity.isFinite && (0...1).contains(opacity)
             && [red, green, blue].allSatisfy { $0.isFinite && (0...1).contains($0) }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, size, red, green, blue, opacity, inside, position
+    }
+
+    init(enabled: Bool? = nil, size: CGFloat = 4, red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, opacity: Double = 1, inside: Bool = false) {
+        self.enabled = enabled
+        self.size = size
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.opacity = opacity
+        self.position = inside ? .inside : .outside
+    }
+
+    init(enabled: Bool? = nil, size: CGFloat = 4, red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, opacity: Double = 1, position: StrokePosition) {
+        self.enabled = enabled
+        self.size = size
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.opacity = opacity
+        self.position = position
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
+        self.size = try container.decodeIfPresent(CGFloat.self, forKey: .size) ?? 4
+        self.red = try container.decodeIfPresent(CGFloat.self, forKey: .red) ?? 0
+        self.green = try container.decodeIfPresent(CGFloat.self, forKey: .green) ?? 0
+        self.blue = try container.decodeIfPresent(CGFloat.self, forKey: .blue) ?? 0
+        self.opacity = try container.decodeIfPresent(Double.self, forKey: .opacity) ?? 1
+        if let pos = try container.decodeIfPresent(StrokePosition.self, forKey: .position) {
+            self.position = pos
+        } else if let isInside = try container.decodeIfPresent(Bool.self, forKey: .inside) {
+            self.position = isInside ? .inside : .outside
+        } else {
+            self.position = .outside
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(enabled, forKey: .enabled)
+        try container.encode(size, forKey: .size)
+        try container.encode(red, forKey: .red)
+        try container.encode(green, forKey: .green)
+        try container.encode(blue, forKey: .blue)
+        try container.encode(opacity, forKey: .opacity)
+        try container.encode(position, forKey: .position)
+        try container.encode(position == .inside, forKey: .inside)
     }
 }
 
@@ -421,7 +485,16 @@ nonisolated enum LayerEffectsRenderer {
     static func margin(for effects: LayerEffects) -> CGFloat {
         let effects = effects.visible
         var margin: CGFloat = 0
-        if let stroke = effects.stroke, !stroke.inside { margin = max(margin, stroke.size) }
+        if let stroke = effects.stroke {
+            switch stroke.position {
+            case .outside:
+                margin = max(margin, stroke.size)
+            case .center:
+                margin = max(margin, ceil(stroke.size / 2))
+            case .inside:
+                break
+            }
+        }
         if let shadow = effects.shadow {
             margin = max(margin, shadow.distance + shadow.blur * 3)
         }
@@ -468,7 +541,7 @@ nonisolated enum LayerEffectsRenderer {
             let alpha = try strokeCoverage(shown, placed: placed, size: CGSize(width: width, height: height), stroke: stroke)
             fill(stroke.color, alpha: stroke.opacity, coverage: alpha, in: full, context: context)
         }
-        if let stroke, !stroke.inside { try drawStroke(stroke) }
+        if let stroke, stroke.position == .outside { try drawStroke(stroke) }
         // Source-over preserves effects beneath transparent pixels. BrushRaster.draw uses .copy,
         // which would erase the stroke/shadow everywhere inside the source's rectangular bounds.
         context.saveGState()
@@ -490,7 +563,7 @@ nonisolated enum LayerEffectsRenderer {
            let inside = try? innerCoverage(shown, placed: placed, size: CGSize(width: width, height: height), shadow: inner) {
             fill(inner.color, alpha: inner.opacity, coverage: inside, in: full, context: context)
         }
-        if let stroke, stroke.inside { try drawStroke(stroke) }
+        if let stroke, stroke.position != .outside { try drawStroke(stroke) }
         guard let result = context.makeImage() else { throw ExportError.render }
         return (result, inset)
     }
@@ -574,11 +647,21 @@ nonisolated enum LayerEffectsRenderer {
         let width = Int(size.width), height = Int(size.height)
         let shape = try coverage(image, in: placed, size: size, blur: 0)
         var levels = try GuidedMatte.levels(of: shape, width: width, height: height)
-        let reach = max(1, Int(stroke.size.rounded()))
-        let moved = extreme(levels, width: width, height: height, reach: reach, smallest: stroke.inside)
-        // The ring between the two shapes.
-        for i in levels.indices {
-            levels[i] = stroke.inside ? max(0, levels[i] - moved[i]) : max(0, moved[i] - levels[i])
+        switch stroke.position {
+        case .outside:
+            let reach = max(1, Int(stroke.size.rounded()))
+            let moved = extreme(levels, width: width, height: height, reach: reach, smallest: false)
+            for i in levels.indices { levels[i] = max(0, moved[i] - levels[i]) }
+        case .inside:
+            let reach = max(1, Int(stroke.size.rounded()))
+            let moved = extreme(levels, width: width, height: height, reach: reach, smallest: true)
+            for i in levels.indices { levels[i] = max(0, levels[i] - moved[i]) }
+        case .center:
+            let outReach = max(1, Int(ceil(stroke.size / 2.0)))
+            let inReach = max(0, Int(floor(stroke.size / 2.0)))
+            let dilated = extreme(levels, width: width, height: height, reach: outReach, smallest: false)
+            let eroded = inReach > 0 ? extreme(levels, width: width, height: height, reach: inReach, smallest: true) : levels
+            for i in levels.indices { levels[i] = max(0, dilated[i] - eroded[i]) }
         }
         return try GuidedMatte.image(levels, width: width, height: height)
     }
