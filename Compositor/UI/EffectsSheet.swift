@@ -1,20 +1,31 @@
 import SwiftUI
 
-/// One effect's controls, bound to the layer that opened the panel. Changes preview on the canvas.
+/// Unified Layer Effects inspector displaying all effects in one panel with enable/disable toggles,
+/// controls, and live canvas preview.
 struct EffectsSheet: View {
     @Bindable var session: EditorSession
-    let kind: LayerEffectKind
+    var kind: LayerEffectKind? = nil
+    @State private var selectedKind: LayerEffectKind = .stroke
+
+    static let inspectorOrder: [LayerEffectKind] = [
+        .stroke, .outerGlow, .shadow, .innerGlow, .colorOverlay, .innerShadow
+    ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            switch kind {
-            case .stroke: stroke
-            case .shadow: shadow
-            case .colorOverlay: colorOverlay
-            case .innerShadow: innerShadow
-            case .outerGlow: outerGlow
-            case .innerGlow: innerGlow
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Layer Effects").font(.headline)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Self.inspectorOrder, id: \.self) { effectKind in
+                        effectSection(effectKind)
+                    }
+                }
+                .padding(.vertical, 4)
             }
+            .frame(maxHeight: 480)
+
+            Divider()
+
             HStack(spacing: 10) {
                 Spacer()
                 Button("Cancel") { session.finishEffectsEditing(commit: false) }
@@ -23,35 +34,117 @@ struct EffectsSheet: View {
                     .configuredNativeShortcut(.return)
             }
         }
-        .padding(20).frame(width: 340).fixedSize()
+        .padding(18)
+        .frame(width: 360)
+        .fixedSize(horizontal: true, vertical: false)
+        .onAppear {
+            if let initial = kind ?? session.effectsEditing?.kind {
+                selectedKind = initial
+            }
+        }
         // The picker previews its working color on the layer while it is open.
         .onChange(of: session.colorPicker?.color) { _, _ in session.previewEffectColor() }
     }
 
-    @ViewBuilder private var stroke: some View {
-        let effect = session.editingEffects.stroke
-        HStack {
-            Text("Stroke").font(.headline)
-            Spacer()
-            if let effect {
-                Picker("Position", selection: Binding(get: { effect.position }, set: { position in
-                    session.changeEffects { $0.stroke?.position = position }
-                })) {
-                    Text("Outside").tag(StrokePosition.outside)
-                    Text("Center").tag(StrokePosition.center)
-                    Text("Inside").tag(StrokePosition.inside)
-                }.pickerStyle(.segmented).labelsHidden().fixedSize()
+    @ViewBuilder private func effectSection(_ kind: LayerEffectKind) -> some View {
+        let isEnabled = session.editingEffects.isEnabled(kind)
+        let isSelected = selectedKind == kind
+
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Toggle("", isOn: Binding(get: {
+                    session.editingEffects.isEnabled(kind)
+                }, set: { active in
+                    toggleEffect(kind, enabled: active)
+                }))
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+
+                Text(kind.rawValue)
+                    .font(.subheadline)
+                    .fontWeight(isSelected ? .semibold : .regular)
+
+                Spacer()
+
+                if isEnabled {
+                    swatch(kind)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                selectedKind = kind
+                if !session.editingEffects.contains(kind) {
+                    toggleEffect(kind, enabled: true)
+                }
+            }
+
+            if isEnabled {
+                VStack(alignment: .leading, spacing: 10) {
+                    switch kind {
+                    case .stroke: strokeControls
+                    case .outerGlow: outerGlowControls
+                    case .shadow: shadowControls
+                    case .innerGlow: innerGlowControls
+                    case .colorOverlay: colorOverlayControls
+                    case .innerShadow: innerShadowControls
+                    }
+                }
+                .padding(.leading, 24)
+                .padding(.top, 4)
             }
         }
-        if let effect {
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.08) : Color.clear)
+        )
+    }
+
+    private func toggleEffect(_ kind: LayerEffectKind, enabled: Bool) {
+        selectedKind = kind
+        session.changeEffects { effects in
+            if !effects.contains(kind) {
+                switch kind {
+                case .stroke:
+                    var new = StrokeEffect()
+                    new.red = session.backgroundColor.red
+                    new.green = session.backgroundColor.green
+                    new.blue = session.backgroundColor.blue
+                    effects.stroke = new
+                case .shadow:
+                    effects.shadow = ShadowEffect()
+                case .colorOverlay:
+                    var new = ColorOverlayEffect()
+                    new.red = session.backgroundColor.red
+                    new.green = session.backgroundColor.green
+                    new.blue = session.backgroundColor.blue
+                    effects.colorOverlay = new
+                case .innerShadow:
+                    effects.innerShadow = InnerShadowEffect()
+                case .outerGlow:
+                    effects.outerGlow = OuterGlowEffect()
+                case .innerGlow:
+                    effects.innerGlow = InnerGlowEffect()
+                }
+            } else {
+                effects.setEnabled(enabled, for: kind)
+            }
+        }
+    }
+
+    @ViewBuilder private var strokeControls: some View {
+        if let effect = session.editingEffects.stroke {
+            Picker("Position", selection: Binding(get: { effect.position }, set: { position in
+                session.changeEffects { $0.stroke?.position = position }
+            })) {
+                Text("Outside").tag(StrokePosition.outside)
+                Text("Center").tag(StrokePosition.center)
+                Text("Inside").tag(StrokePosition.inside)
+            }.pickerStyle(.segmented).labelsHidden().fixedSize()
+
             blendModePicker(selection: Binding(get: { effect.blendMode }, set: { mode in
                 session.changeEffects { $0.stroke?.blendMode = mode }
             }))
-            HStack {
-                Text("Color").frame(width: 64, alignment: .leading)
-                swatch(.stroke)
-                Spacer()
-            }
             slider("Size", value: Binding(get: { effect.size }, set: { size in
                 session.changeEffects { $0.stroke?.size = size }
             }), range: 0...20, inputRange: 0...StrokeEffect.maxSize, unit: "px")
@@ -61,14 +154,8 @@ struct EffectsSheet: View {
         }
     }
 
-    @ViewBuilder private var shadow: some View {
-        let effect = session.editingEffects.shadow
-        HStack {
-            Text("Drop Shadow").font(.headline)
-            Spacer()
-            if effect != nil { swatch(.shadow) }
-        }
-        if let effect {
+    @ViewBuilder private var shadowControls: some View {
+        if let effect = session.editingEffects.shadow {
             blendModePicker(selection: Binding(get: { effect.blendMode }, set: { mode in
                 session.changeEffects { $0.shadow?.blendMode = mode }
             }))
@@ -90,14 +177,8 @@ struct EffectsSheet: View {
         }
     }
 
-    @ViewBuilder private var colorOverlay: some View {
-        let effect = session.editingEffects.colorOverlay
-        HStack {
-            Text("Color Overlay").font(.headline)
-            Spacer()
-            if effect != nil { swatch(.colorOverlay) }
-        }
-        if let effect {
+    @ViewBuilder private var colorOverlayControls: some View {
+        if let effect = session.editingEffects.colorOverlay {
             blendModePicker(selection: Binding(get: { effect.blendMode }, set: { mode in
                 session.changeEffects { $0.colorOverlay?.blendMode = mode }
             }))
@@ -107,14 +188,8 @@ struct EffectsSheet: View {
         }
     }
 
-    @ViewBuilder private var innerShadow: some View {
-        let effect = session.editingEffects.innerShadow
-        HStack {
-            Text("Inner Shadow").font(.headline)
-            Spacer()
-            if effect != nil { swatch(.innerShadow) }
-        }
-        if let effect {
+    @ViewBuilder private var innerShadowControls: some View {
+        if let effect = session.editingEffects.innerShadow {
             blendModePicker(selection: Binding(get: { effect.blendMode }, set: { mode in
                 session.changeEffects { $0.innerShadow?.blendMode = mode }
             }))
@@ -136,14 +211,8 @@ struct EffectsSheet: View {
         }
     }
 
-    @ViewBuilder private var outerGlow: some View {
-        let effect = session.editingEffects.outerGlow
-        HStack {
-            Text("Outer Glow").font(.headline)
-            Spacer()
-            if effect != nil { swatch(.outerGlow) }
-        }
-        if let effect {
+    @ViewBuilder private var outerGlowControls: some View {
+        if let effect = session.editingEffects.outerGlow {
             blendModePicker(selection: Binding(get: { effect.blendMode }, set: { mode in
                 session.changeEffects { $0.outerGlow?.blendMode = mode }
             }))
@@ -156,14 +225,8 @@ struct EffectsSheet: View {
         }
     }
 
-    @ViewBuilder private var innerGlow: some View {
-        let effect = session.editingEffects.innerGlow
-        HStack {
-            Text("Inner Glow").font(.headline)
-            Spacer()
-            if effect != nil { swatch(.innerGlow) }
-        }
-        if let effect {
+    @ViewBuilder private var innerGlowControls: some View {
+        if let effect = session.editingEffects.innerGlow {
             blendModePicker(selection: Binding(get: { effect.blendMode }, set: { mode in
                 session.changeEffects { $0.innerGlow?.blendMode = mode }
             }))

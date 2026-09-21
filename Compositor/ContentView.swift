@@ -206,12 +206,17 @@ struct ContentView: View {
         .onChange(of: session.effectsEditing) { _, selection in
             if let selection {
                 effectsPanel.onClose = { session.finishEffectsEditing(commit: false) }
-                effectsPanel.show(title: selection.kind.rawValue, content: EffectsSheet(session: session, kind: selection.kind))
+                effectsPanel.show(title: "Layer Effects", content: EffectsSheet(session: session, kind: selection.kind))
             } else { effectsPanel.close() }
+        }
+        .onChange(of: session.activeLayerID) { _, newID in
+            if session.effectsEditing != nil, let newID {
+                session.openEffectsInspector(for: newID)
+            }
         }
         .onChange(of: session.document?.layers) { _, layers in
             if let editing = session.effectsEditing,
-               layers?.first(where: { $0.id == editing.layerID })?.effects?.contains(editing.kind) != true {
+               layers?.first(where: { $0.id == editing.layerID }) == nil {
                 if let picker = session.colorPicker, case .effect = picker.target { session.closeColorPicker(commit: false) }
                 session.effectsEditing = nil
                 session.effectsEditingOriginal = nil
