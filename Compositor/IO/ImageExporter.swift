@@ -45,8 +45,24 @@ actor ImageExporter {
                 func drawLayer(_ mode: LayerBlendMode, _ into: CGContext) {
                     if let effects {
                         let grown = LayerEffectsRenderer.placed(layer.transform, image: effects.image, inset: effects.inset)
-                        LayerRenderer.draw(effects.image, transform: grown, center: grown.center,
-                            opacity: opacity, blendMode: mode, mask: nil, in: into)
+                        if !effects.passes.isEmpty {
+                            for pass in effects.passes {
+                                let passMode = pass.blendMode ?? mode
+                                let passOpacity = opacity * pass.opacity
+                                if SeparableBlend.isCoreGraphicsWrong(passMode) {
+                                    _ = SeparableBlend.draw(passMode, in: into) { subTarget in
+                                        LayerRenderer.draw(pass.image, transform: grown, center: grown.center,
+                                            opacity: passOpacity, blendMode: .normal, mask: nil, in: subTarget)
+                                    }
+                                } else {
+                                    LayerRenderer.draw(pass.image, transform: grown, center: grown.center,
+                                        opacity: passOpacity, blendMode: passMode, mask: nil, in: into)
+                                }
+                            }
+                        } else {
+                            LayerRenderer.draw(effects.image, transform: grown, center: grown.center,
+                                opacity: opacity, blendMode: mode, mask: nil, in: into)
+                        }
                         return
                     }
                     LayerRenderer.draw(image, transform: layer.transform, center: layer.transform.center,
@@ -54,7 +70,7 @@ actor ImageExporter {
                 }
                 let mode = layer.blendMode ?? .normal
                 // Core Graphics blends these two wrong; see SeparableBlend.
-                if SeparableBlend.isCoreGraphicsWrong(mode), SeparableBlend.draw(mode, in: target, body: { drawLayer(.normal, $0) }) { return }
+                if effects == nil && SeparableBlend.isCoreGraphicsWrong(mode), SeparableBlend.draw(mode, in: target, body: { drawLayer(.normal, $0) }) { return }
                 drawLayer(mode, target)
             }
             live.adjustment = { records[$0]?.adjustment }

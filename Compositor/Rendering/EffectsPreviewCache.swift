@@ -38,6 +38,7 @@ final class EffectsPreviewCache {
         /// Set only on a seeded result: where that image belongs on the document, which an inset can't express
         /// when the layer's own box was cropped as well as warped.
         var placement: LayerTransform? = nil
+        var passes: [EffectPass] = []
     }
     private struct Entry {
         let request: Request
@@ -54,14 +55,14 @@ final class EffectsPreviewCache {
     func seed(_ id: UUID, image: CGImage, placement: LayerTransform) {
         // Whatever is being rendered is for the pixels this replaces, and landing later would drop the seed.
         entries.removeValue(forKey: id)?.request.cancel()
-        seeds[id] = Result(image: image, inset: 0, placement: placement)
+        seeds[id] = Result(image: image, inset: 0, placement: placement, passes: [])
     }
 
     /// Effects for a layer being painted, from the pixels the stroke has so far. Keyed by the stroke's revision:
     /// the last result stays on screen while the next one renders, so the effects never blink off mid-stroke.
     /// What is already rendered for a layer, without asking for anything new.
-    func rendered(_ id: UUID) -> (image: CGImage, inset: CGFloat, placement: LayerTransform?)? {
-        (entries[id]?.result ?? seeds[id]).map { ($0.image, $0.inset, $0.placement) }
+    func rendered(_ id: UUID) -> (image: CGImage, inset: CGFloat, placement: LayerTransform?, passes: [EffectPass])? {
+        (entries[id]?.result ?? seeds[id]).map { ($0.image, $0.inset, $0.placement, $0.passes) }
     }
 
     func prepare(layers: [ImageLayer]) {
@@ -74,7 +75,7 @@ final class EffectsPreviewCache {
     }
 
     func preview(for layer: ImageLayer, mask: CGImage?, transform: LayerTransform, maskPlacement: LayerTransform?,
-                 completion: @escaping @MainActor @Sendable () -> Void) -> (image: CGImage, inset: CGFloat, placement: LayerTransform?)? {
+                 completion: @escaping @MainActor @Sendable () -> Void) -> (image: CGImage, inset: CGFloat, placement: LayerTransform?, passes: [EffectPass])? {
         guard let image = layer.asset?.image, let effects = layer.effects?.visible, !effects.isEmpty, effects.isValid else {
             entries.removeValue(forKey: layer.id)?.request.cancel()
             return nil
@@ -82,7 +83,7 @@ final class EffectsPreviewCache {
         let request = Request(image: image, mask: mask, maskSource: layer.mask?.enabledImage,
                               placement: maskPlacement, transform: transform, effects: effects, sideLimit: sideLimit)
         if let entry = entries[layer.id], entry.request.matches(request) {
-            return entry.result.map { ($0.image, $0.inset, $0.placement) }
+            return entry.result.map { ($0.image, $0.inset, $0.placement, $0.passes) }
         }
         let old = entries[layer.id]
         old?.request.cancel()
@@ -106,7 +107,7 @@ final class EffectsPreviewCache {
                 completion()
             }
         }
-        return previous.map { ($0.image, $0.inset, $0.placement) }
+        return previous.map { ($0.image, $0.inset, $0.placement, $0.passes) }
     }
 
     nonisolated private static func render(_ request: Request) throws -> Result {
@@ -132,7 +133,7 @@ final class EffectsPreviewCache {
         effects.stroke?.size *= factor
         effects.shadow?.distance *= factor
         effects.shadow?.blur *= factor
-        let rendered = try LayerEffectsRenderer.render(pixels, mask: mask, effects: effects)
-        return Result(image: rendered.image, inset: rendered.inset)
+        let rendered = try LayerEffectsRenderer.renderPasses(pixels, mask: mask, effects: effects)
+        return Result(image: rendered.image, inset: rendered.inset, passes: rendered.passes)
     }
 }
