@@ -21,8 +21,9 @@ struct ContentView: View {
         guard let workspace = applicationDelegate?.workspace else { return true }
         return workspace.canReceiveDrag(into: workspace.current.id)
     }
-    var body: some View {
-        VStack(spacing: 0) {
+    // Extracted from `body`: as one expression the type checker times out (Xcode 26.1).
+    @ViewBuilder private var toolHeaders: some View {
+        Group {
             if session.tool == .move {
                 TransformInspector(session: session).id(session.activeLayerID)
                 Divider()
@@ -71,6 +72,12 @@ struct ContentView: View {
                 }.padding(.horizontal, 18).toolHeaderBar()
                 Divider()
             }
+        }
+    }
+
+    @ViewBuilder private var editorStack: some View {
+        VStack(spacing: 0) {
+            toolHeaders
             HStack(spacing: 0) {
                 toolRail
                 Divider()
@@ -102,6 +109,10 @@ struct ContentView: View {
             statusBar.fixedSize(horizontal: false, vertical: true)
                 .modifier(WidthReader(width: $windowWidth))
         }
+    }
+
+    @ViewBuilder private var editorChrome: some View {
+        editorStack
         .background(Color(white: 0.14))
         .background {
             if let applicationDelegate, applicationDelegate.projects.workspace == nil {
@@ -174,6 +185,10 @@ struct ContentView: View {
                 }.help("Zoom out (⌘−)").disabled(session.document == nil)
             }
         }
+    }
+
+    var body: some View {
+        editorChrome
         .onChange(of: session.levels == nil) { _, closed in
             if closed { levelsPanel.close() }
             else {
