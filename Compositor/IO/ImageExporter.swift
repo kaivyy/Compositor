@@ -143,6 +143,26 @@ actor ImageExporter {
         try write(data, to: url)
     }
 
+    /// Exports un-premultiplied straight PNG data for an RGBAChannelBuffer, preserving RGB values in transparent pixels.
+    func straightPNGData(for buffer: RGBAChannelBuffer, resolution: Double = 72) throws -> Data {
+        guard let straightImage = buffer.makeStraightCGImage() else { throw ExportError.render }
+        return try encode(straightImage, type: .png, properties: [
+            kCGImagePropertyDPIWidth: resolution,
+            kCGImagePropertyDPIHeight: resolution
+        ] as CFDictionary)
+    }
+
+    /// Exports un-premultiplied straight PNG data from an image, preserving RGB values in transparent pixels.
+    func straightPNGData(from image: CGImage, resolution: Double = 72) throws -> Data {
+        let buffer = RGBAChannelBuffer(image: image)
+        return try straightPNGData(for: buffer, resolution: resolution)
+    }
+
+    func exportStraightPNG(from image: CGImage, to url: URL, resolution: Double = 72) throws {
+        let data = try straightPNGData(from: image, resolution: resolution)
+        try write(data, to: url)
+    }
+
     func write(_ data: Data, to url: URL) throws {
         var coordinationError: NSError?
         var writeError: Error?
