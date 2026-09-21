@@ -88,7 +88,7 @@ import CoreImage
         context.clip(to: placed(inner))
         context.clear(placed(inner))
         if let shadow = effects.shadow, shadow.isEnabled, shadow.opacity > 0,
-           let coverage = try? LayerEffectsRenderer.shadowCoverage(pixels, in: outer.size, offset: shadow.offset, blur: shadow.blur) {
+           let coverage = try? LayerEffectsRenderer.shadowCoverage(pixels, in: outer.size, offset: shadow.offset, blur: shadow.blur, spread: shadow.spread) {
             fill(shadow.color, alpha: shadow.opacity, coverage: coverage, in: placed(outer))
         }
         if let glow = effects.outerGlow, glow.isEnabled, glow.opacity > 0,
