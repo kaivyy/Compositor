@@ -280,6 +280,8 @@ struct CompositorApp: App {
                         .disabled(!session.canEditLayers || session.activeLayer?.parentID == nil)
                     Button("New Blank Layer") { session.addBlankLayer() }
                         .configuredKeyboardShortcut("n", modifiers: [.command, .shift]).disabled(!session.canEditLayers)
+                    Button("New Collage Grid…") { Task { await applicationDelegate.projects.collageGrid() } }
+                        .disabled(!session.canEditLayers)
                     Button("Rename Layer…") { session.renamingLayerID = session.activeLayerID }
                         .disabled(!session.canEditLayers || session.activeLayer == nil)
                     Button(session.activeLayer?.isVisible == false ? "Show Layer" : "Hide Layer") {
