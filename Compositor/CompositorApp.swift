@@ -222,6 +222,9 @@ struct CompositorApp: App {
                     Button("Edit Adjustment…") {
                         session.adjustmentEditingID = session.activeLayerID
                     }.disabled(!session.canEditLayers || session.activeLayer?.adjustment == nil)
+                    Button("Layer Style…") {
+                        session.showsStylesInspector = true
+                    }.disabled(!session.canEditAppearance)
                     Divider()
                     Button(session.canTransformSelection ? "Transform Selection" : "Transform Layer") { session.transformCommand() }
                         .keyboardShortcut("t").disabled(!session.canTransform && !session.canTransformSelection)

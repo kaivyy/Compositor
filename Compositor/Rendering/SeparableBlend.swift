@@ -8,8 +8,8 @@ import CoreImage
 /// a layer in one of these modes is drawn into a copy of the canvas, blended there, and the result put back.
 nonisolated enum SeparableBlend {
     static func isCoreGraphicsWrong(_ mode: LayerBlendMode) -> Bool { mode == .colorBurn || mode == .colorDodge }
-    private static let ciContext = CIContext(options: [.cacheIntermediates: false])
     private static let space = CGColorSpace(name: CGColorSpace.sRGB)!
+    private static let ciContext = CIContext(options: [.workingColorSpace: space, .cacheIntermediates: false])
 
     /// Draws one layer into `context` in `mode`. `body` draws it as it would be drawn normally, into a context laid
     /// out exactly like `context`. Only a bitmap-backed context can be read back, so anywhere else this reports
@@ -26,8 +26,8 @@ nonisolated enum SeparableBlend {
         surface.concatenate(context.ctm)
         body(surface)
         guard let source = surface.makeImage() else { return false }
-        filter.setValue(CIImage(cgImage: source), forKey: kCIInputImageKey)
-        filter.setValue(CIImage(cgImage: backdrop), forKey: kCIInputBackgroundImageKey)
+        filter.setValue(CIImage(cgImage: source, options: [.colorSpace: space]), forKey: kCIInputImageKey)
+        filter.setValue(CIImage(cgImage: backdrop, options: [.colorSpace: space]), forKey: kCIInputBackgroundImageKey)
         let frame = CGRect(x: 0, y: 0, width: context.width, height: context.height)
         guard let output = filter.outputImage,
               let blended = ciContext.createCGImage(output, from: frame, format: .RGBA8, colorSpace: space) else { return false }

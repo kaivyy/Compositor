@@ -44,6 +44,35 @@ struct LayersPanel: View {
                     }
                 } label: { Image(systemName: "circle.lefthalf.filled").footerHitArea() }
                     .menuStyle(.borderlessButton).fixedSize().help("New adjustment layer").disabled(!session.canEditLayers)
+                Menu {
+                    Button("Layer Styles...") { session.showsStylesInspector = true }
+                    Divider()
+                    Button("Neon Cyan Preset") {
+                        let neonStyles = LayerStyles(
+                            isEnabled: true,
+                            stroke: StrokeEffect(isEnabled: true, size: 3, position: .outside, color: PaletteColor(red: 0, green: 0.94, blue: 1), opacity: 1.0, blendMode: .normal),
+                            outerGlow: OuterGlowEffect(isEnabled: true, color: PaletteColor(red: 0, green: 0.94, blue: 1), opacity: 0.85, blendMode: .screen, size: 24, spread: 0.15),
+                            dropShadow: DropShadowEffect(isEnabled: true, color: PaletteColor(red: 0, green: 0.94, blue: 1), opacity: 0.5, blendMode: .screen, angle: 90, distance: 0, size: 60, spread: 0)
+                        )
+                        session.setLayerStyles(neonStyles, actionName: "Apply Neon Preset")
+                    }
+                    Button("Neon Pink Preset") {
+                        let neonStyles = LayerStyles(
+                            isEnabled: true,
+                            stroke: StrokeEffect(isEnabled: true, size: 3, position: .outside, color: PaletteColor(red: 1, green: 0.08, blue: 0.58), opacity: 1.0, blendMode: .normal),
+                            outerGlow: OuterGlowEffect(isEnabled: true, color: PaletteColor(red: 1, green: 0.08, blue: 0.58), opacity: 0.85, blendMode: .screen, size: 24, spread: 0.15),
+                            dropShadow: DropShadowEffect(isEnabled: true, color: PaletteColor(red: 1, green: 0.08, blue: 0.58), opacity: 0.5, blendMode: .screen, angle: 90, distance: 0, size: 60, spread: 0)
+                        )
+                        session.setLayerStyles(neonStyles, actionName: "Apply Neon Preset")
+                    }
+                    Divider()
+                    Button("Copy Layer Style") { session.copyLayerStyles() }.disabled(session.activeLayer?.styles == nil)
+                    Button("Paste Layer Style") { session.pasteLayerStyles() }.disabled(session.copiedStyles == nil)
+                    Button("Clear Layer Style") { session.clearLayerStyles() }.disabled(session.activeLayer?.styles == nil)
+                } label: {
+                    Text("fx").font(.system(size: 13, weight: .bold, design: .serif)).footerHitArea()
+                }
+                .menuStyle(.borderlessButton).fixedSize().help("Add a layer style (fx)").disabled(!session.canEditAppearance)
                 Spacer()
                 Button { session.deleteLayerOrMask() } label: { Image(systemName: "trash").footerHitArea() }
                     .help(session.isMaskSelected ? "Delete layer mask" : session.selectedLayerIDs.count > 1 ? "Delete selected layers" : "Delete selected layer")

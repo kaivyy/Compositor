@@ -50,9 +50,9 @@ nonisolated struct LayerTextStyle: Codable, Equatable, Sendable {
     /// Baseline shift in points (0 = normal).
     var baselineShift: CGFloat = 0
     /// Text color channels (sRGB).
-    var red: CGFloat = 0
-    var green: CGFloat = 0
-    var blue: CGFloat = 0
+    var red: CGFloat = PaletteColor.white.red
+    var green: CGFloat = PaletteColor.white.green
+    var blue: CGFloat = PaletteColor.white.blue
     var alpha: CGFloat = 1
 
     // Character toggle styles
@@ -77,11 +77,13 @@ nonisolated struct LayerTextStyle: Codable, Equatable, Sendable {
     var strokeAlpha: CGFloat = 1
 
     var color: PaletteColor {
-        PaletteColor(red: red, green: green, blue: blue)
+        get { PaletteColor(red: red, green: green, blue: blue) }
+        set { red = newValue.red; green = newValue.green; blue = newValue.blue }
     }
 
     var strokeColor: PaletteColor {
-        PaletteColor(red: strokeRed, green: strokeGreen, blue: strokeBlue)
+        get { PaletteColor(red: strokeRed, green: strokeGreen, blue: strokeBlue) }
+        set { strokeRed = newValue.red; strokeGreen = newValue.green; strokeBlue = newValue.blue }
     }
 
     enum CodingKeys: String, CodingKey {
@@ -94,7 +96,11 @@ nonisolated struct LayerTextStyle: Codable, Equatable, Sendable {
         case strokeWidth, strokePosition, strokeRed, strokeGreen, strokeBlue, strokeAlpha
     }
 
-    init() {}
+    init() {
+        self.red = PaletteColor.white.red
+        self.green = PaletteColor.white.green
+        self.blue = PaletteColor.white.blue
+    }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -107,9 +113,9 @@ nonisolated struct LayerTextStyle: Codable, Equatable, Sendable {
         verticalScale = try container.decodeIfPresent(CGFloat.self, forKey: .verticalScale) ?? 100
         horizontalScale = try container.decodeIfPresent(CGFloat.self, forKey: .horizontalScale) ?? 100
         baselineShift = try container.decodeIfPresent(CGFloat.self, forKey: .baselineShift) ?? 0
-        red = try container.decodeIfPresent(CGFloat.self, forKey: .red) ?? 0
-        green = try container.decodeIfPresent(CGFloat.self, forKey: .green) ?? 0
-        blue = try container.decodeIfPresent(CGFloat.self, forKey: .blue) ?? 0
+        red = try container.decodeIfPresent(CGFloat.self, forKey: .red) ?? PaletteColor.white.red
+        green = try container.decodeIfPresent(CGFloat.self, forKey: .green) ?? PaletteColor.white.green
+        blue = try container.decodeIfPresent(CGFloat.self, forKey: .blue) ?? PaletteColor.white.blue
         alpha = try container.decodeIfPresent(CGFloat.self, forKey: .alpha) ?? 1
         isFauxBold = try container.decodeIfPresent(Bool.self, forKey: .isFauxBold) ?? false
         isFauxItalic = try container.decodeIfPresent(Bool.self, forKey: .isFauxItalic) ?? false
@@ -354,9 +360,9 @@ extension EditorSession {
         style.verticalScale = textVerticalScale
         style.horizontalScale = textHorizontalScale
         style.baselineShift = textBaselineShift
-        style.red = foregroundColor.red
-        style.green = foregroundColor.green
-        style.blue = foregroundColor.blue
+        style.red = textTextColor.red
+        style.green = textTextColor.green
+        style.blue = textTextColor.blue
         style.alpha = 1
         style.isFauxBold = textFauxBold
         style.isFauxItalic = textFauxItalic
@@ -409,6 +415,7 @@ extension EditorSession {
         textStrokeGreen = style.strokeGreen
         textStrokeBlue = style.strokeBlue
         textStrokeAlpha = style.strokeAlpha
+        textTextColor = style.color
         foregroundColor = style.color
     }
 
@@ -429,6 +436,7 @@ extension EditorSession {
     func commitTextEdit() {
         guard let editingID = textEditingLayerID else { return }
         textEditingLayerID = nil
+        LayerStyleCache.shared.invalidate(layerID: editingID)
 
         let trimmed = textContent.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty && textEditIsNewLayer {
@@ -454,6 +462,7 @@ extension EditorSession {
     func cancelTextEdit() {
         guard let editingID = textEditingLayerID else { return }
         textEditingLayerID = nil
+        LayerStyleCache.shared.invalidate(layerID: editingID)
 
         if textEditIsNewLayer {
             deleteLayer(editingID)
@@ -478,10 +487,7 @@ extension EditorSession {
     func addTextLayer(at point: CGPoint, content: String = "") {
         guard canEditLayers, document != nil else { return }
         let textString = content
-        var style = currentTextStyle(overrideText: textString)
-        style.red = foregroundColor.red
-        style.green = foregroundColor.green
-        style.blue = foregroundColor.blue
+        let style = currentTextStyle(overrideText: textString)
 
         do {
             let rendered = try Self.textImage(for: style)
@@ -491,6 +497,7 @@ extension EditorSession {
                           dropsSelection: false, text: LayerText(style: style, image: rendered.image))
             textContent = textString
             if let activeID = activeLayerID {
+                LayerStyleCache.shared.invalidate(layerID: activeID)
                 beginTextEdit(layerID: activeID, isNewLayer: true)
             }
         } catch {
@@ -532,6 +539,7 @@ extension EditorSession {
             updatedLayer.transform = newTransform
             updatedLayer.text = LayerText(style: newStyle, image: rendered.image)
             document?.layers[index] = updatedLayer
+            LayerStyleCache.shared.invalidate(layerID: activeID)
 
             if registerUndo {
                 endEdit()

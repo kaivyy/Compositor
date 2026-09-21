@@ -411,6 +411,7 @@ final class CanvasView: NSView {
             let adjustment: LayerAdjustment?
             /// Where the mask shows when placed apart from the layer.
             let maskPlacement: LayerTransform?
+            let styles: LayerStyles?
         }
         let brushRevision: Int
         let pixelGrid: Bool
@@ -433,10 +434,11 @@ final class CanvasView: NSView {
         // Image identity detects raster replacement without comparing pixel data.
         let document = session.document
         let state = DisplayState(brushRevision: session.brushRevision, pixelGrid: session.showsPixelGrid, documentID: document?.id, size: document?.size, renderBounds: renderBounds, viewport: session.viewport,
-            layers: (document.map { $0.layers.contains(where: { $0.maskSourceID != nil }) ? $0.layers : $0.renderLayers } ?? []).filter { $0.asset != nil || $0.adjustment != nil }.map {
+            layers: (document.map { $0.layers.contains(where: { $0.maskSourceID != nil }) ? $0.layers : $0.renderLayers } ?? []).filter { $0.asset != nil || $0.adjustment != nil || $0.liveText != nil }.map {
                 DisplayState.Layer(id: $0.id, transform: session.displayedTransform(for: $0),
                                    imageID: $0.asset.map { ObjectIdentifier($0.image) }, maskID: $0.mask?.enabledImage.map { ObjectIdentifier($0) }, maskSourceID: $0.maskSourceID, parentID: $0.parentID, visible: document?.effectiveVisibleIDs.contains($0.id) == true, opacity: $0.opacity, blendMode: session.displayedBlendMode(for: $0), adjustment: $0.adjustment,
-                                   maskPlacement: session.displayedMaskPlacement(for: $0))
+                                   maskPlacement: session.displayedMaskPlacement(for: $0),
+                                   styles: $0.styles)
             },
             folderMasks: (document?.layers ?? []).filter { $0.isGroup && $0.mask != nil }.map {
                 DisplayState.FolderMask(id: $0.id, maskID: $0.mask?.enabledImage.map { ObjectIdentifier($0) },
@@ -785,7 +787,7 @@ final class CanvasView: NSView {
         let byID = Dictionary(uniqueKeysWithValues: document.layers.map { ($0.id, $0) })
         func drawOwn(_ id: UUID, _ context: CGContext) {
             guard let layer = byID[id] else { return }
-            if session.textEditingLayerID == id { return }
+            if session.textEditingLayerID == id && layer.styles?.hasActiveEffects != true { return }
             let mode = session.displayedBlendMode(for: layer)
             if SeparableBlend.isCoreGraphicsWrong(mode), normalBlendLayerID != id {
                 normalBlendLayerID = id
@@ -829,8 +831,11 @@ final class CanvasView: NSView {
                     limit: session.transformEdit != nil ? min(2048, steady) : steady)
             }()
             if stroke == nil, let shaped = session.shapeTransformPreview(for: layer, transform: transform) {
-                LayerRenderer.draw(shaped, transform: transform, center: center(transform.center), scale: scale,
-                    opacity: layer.opacity, blendMode: blendMode(of: layer), mask: mask, in: context)
+                let styled = layer.styles.flatMap { LayerStyleRenderer.render(image: shaped, styles: $0) }
+                let renderImage = styled?.image ?? shaped
+                let padding = styled?.padding ?? 0
+                LayerRenderer.draw(renderImage, transform: transform, center: center(transform.center), scale: scale,
+                    opacity: layer.opacity, blendMode: blendMode(of: layer), mask: mask, padding: padding, in: context)
             } else if let stroke, !stroke.isMask {
                 // Painting pixels previews exactly as the finished layer will look, with the layer's own
                 // sampling, so nothing shifts when a stroke starts or ends (see TiledLayerRenderer).
@@ -859,21 +864,35 @@ final class CanvasView: NSView {
                     image: previous?.raster == nil ? previous?.image : nil, raster: previous?.raster,
                     transform: transform, center: center(transform.center), scale: scale,
                     opacity: layer.opacity, blendMode: blendMode(of: layer), in: context)
-            } else if let asset = layer.asset, let raster = asset.raster, session.hueSaturation?.previewImage(for: layer.id) == nil && session.levels?.previewImage(for: layer.id) == nil && session.filterEdit?.previewImage(for: layer.id) == nil {
+            } else if let asset = layer.asset, let raster = asset.raster, session.hueSaturation?.previewImage(for: layer.id) == nil && session.levels?.previewImage(for: layer.id) == nil && session.filterEdit?.previewImage(for: layer.id) == nil && layer.styles?.hasActiveEffects != true {
                 TiledLayerRenderer.drawRaster(raster, transform: transform, center: center(transform.center), scale: scale,
                     opacity: layer.opacity, blendMode: blendMode(of: layer),
                     mask: mask, in: context)
             } else if stroke == nil, let liveText = layer.liveText, session.filterEdit?.previewImage(for: layer.id) == nil && session.levels?.previewImage(for: layer.id) == nil && session.hueSaturation?.previewImage(for: layer.id) == nil {
-                if session.textEditingLayerID != layer.id {
-                    LayerRenderer.drawText(liveText, transform: transform, center: center(transform.center), scale: scale,
-                        opacity: layer.opacity, blendMode: blendMode(of: layer), mask: mask, in: context)
+                if session.textEditingLayerID != layer.id || layer.styles?.hasActiveEffects == true {
+                    if layer.styles?.hasActiveEffects == true {
+                        let image = layer.asset?.image ?? (try? EditorSession.textImage(for: liveText.style).image)
+                        if let image {
+                            let styled = LayerStyleCache.shared.styledImage(for: layer, baseImage: image)
+                            let renderImage = styled?.image ?? image
+                            let padding = styled?.padding ?? 0
+                            LayerRenderer.draw(renderImage, transform: transform, center: center(transform.center), scale: scale,
+                                opacity: layer.opacity, blendMode: blendMode(of: layer), mask: mask, padding: padding, in: context)
+                        }
+                    } else if session.textEditingLayerID != layer.id {
+                        LayerRenderer.drawText(liveText, transform: transform, center: center(transform.center), scale: scale,
+                            opacity: layer.opacity, blendMode: blendMode(of: layer), mask: mask, in: context)
+                    }
                 }
             } else if let image = session.filterEdit?.previewImage(for: layer.id) ?? session.levels?.previewImage(for: layer.id) ?? session.hueSaturation?.previewImage(for: layer.id) ?? layer.asset?.image {
+                let styled = LayerStyleCache.shared.styledImage(for: layer)
+                let renderImage = styled?.image ?? image
+                let padding = styled?.padding ?? 0
                 // LayerRenderer picks a sharp reduction for the image and its mask itself.
-                LayerRenderer.draw(image, transform: transform,
+                LayerRenderer.draw(renderImage, transform: transform,
                     center: center(transform.center), scale: scale,
                     opacity: layer.opacity, blendMode: blendMode(of: layer),
-                    mask: mask, in: context)
+                    mask: mask, padding: padding, in: context)
             }
         }
         let live = LiveMaskRenderer(bounds: context.boundingBoxOfClipPath, source: { byID[$0]?.maskSourceID }, drawOwn: drawOwn)

@@ -4,9 +4,9 @@ import CoreGraphics
 /// Draws into a top-left coordinate system, shared by the canvas and export.
 nonisolated enum LayerRenderer {
     static func draw(_ image: CGImage, transform: LayerTransform, center: CGPoint,
-                     scale: CGFloat = 1, opacity: Double = 1, blendMode: LayerBlendMode = .normal, mask: CGImage? = nil, in context: CGContext) {
-        let width = transform.size.width * scale
-        let height = transform.size.height * scale
+                     scale: CGFloat = 1, opacity: Double = 1, blendMode: LayerBlendMode = .normal, mask: CGImage? = nil, padding: CGFloat = 0, in context: CGContext) {
+        let width = (transform.size.width + padding * 2) * scale
+        let height = (transform.size.height + padding * 2) * scale
         // Large reductions draw from sharp halvings; Core Graphics then only does the last 2× or less.
         let device = deviceScale(of: context)
         let source = reduced(image, width: width, device: device, sampling: transform.sampling)

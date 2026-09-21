@@ -1,13 +1,15 @@
+import SwiftUI
 import AppKit
 import Observation
 
-nonisolated struct PaletteColor: Equatable, Sendable {
+nonisolated struct PaletteColor: Codable, Hashable, Equatable, Sendable {
     var red: CGFloat
     var green: CGFloat
     var blue: CGFloat
     static let black = PaletteColor(red: 0, green: 0, blue: 0)
     static let white = PaletteColor(red: 1, green: 1, blue: 1)
     var nsColor: NSColor { NSColor(srgbRed: red, green: green, blue: blue, alpha: 1) }
+    var cgColor: CGColor { CGColor(srgbRed: red, green: green, blue: blue, alpha: 1) }
     init(red: CGFloat, green: CGFloat, blue: CGFloat) {
         self.red = red; self.green = green; self.blue = blue
     }
@@ -52,20 +54,93 @@ extension EditorSession {
 
     func openColorPicker(background: Bool) {
         guard canEditPalette, !isMaskSelected else { return }
-        colorPicker = ColorPickerState(background: background, original: paletteColor(background: background))
+        let original = (tool == .text && !background) ? textTextColor : paletteColor(background: background)
+        colorPicker = ColorPickerState(background: background, original: original)
     }
+
+    func openTextColorPicker() {
+        guard canEditPalette, !isMaskSelected else { return }
+        colorPicker = ColorPickerState(target: .textColor, original: textTextColor)
+    }
+
+    func openTextStrokeColorPicker() {
+        guard canEditPalette, !isMaskSelected else { return }
+        let original = PaletteColor(red: textStrokeRed, green: textStrokeGreen, blue: textStrokeBlue)
+        colorPicker = ColorPickerState(target: .textStrokeColor, original: original)
+    }
+
+    func openLayerStyleColorPicker(target: ColorPickerTarget, original: PaletteColor) {
+        guard canEditPalette else { return }
+        colorPicker = ColorPickerState(target: target, original: original)
+    }
+
     func closeColorPicker(commit: Bool) {
         if let colorPicker {
             switch colorPicker.target {
             case .palette(let background):
-                if commit, !isMaskSelected { setPaletteColor(colorPicker.color, background: background) }
+                if commit, !isMaskSelected {
+                    setPaletteColor(colorPicker.color, background: background)
+                    if tool == .text && !background {
+                        textTextColor = colorPicker.color
+                        if activeLayer?.liveText != nil {
+                            updateActiveText { $0.color = colorPicker.color }
+                        }
+                    }
+                }
             case .gradientMap(let highlights):
                 // The end has been previewing the working color; Cancel puts the original back.
                 setGradientMapColor(commit ? colorPicker.color : colorPicker.original, highlights: highlights)
+            case .textColor:
+                let color = commit ? colorPicker.color : colorPicker.original
+                textTextColor = color
+                if activeLayer?.liveText != nil {
+                    updateActiveText { $0.color = color }
+                }
+            case .textStrokeColor:
+                let color = commit ? colorPicker.color : colorPicker.original
+                textStrokeRed = color.red
+                textStrokeGreen = color.green
+                textStrokeBlue = color.blue
+                if activeLayer?.liveText != nil {
+                    updateActiveText {
+                        $0.strokeRed = color.red
+                        $0.strokeGreen = color.green
+                        $0.strokeBlue = color.blue
+                    }
+                }
+            case .layerStyleStroke:
+                let color = commit ? colorPicker.color : colorPicker.original
+                var s = activeLayer?.styles ?? LayerStyles()
+                var effect = s.stroke ?? StrokeEffect()
+                effect.color = color
+                s.stroke = effect
+                setLayerStyles(s, actionName: "Stroke Color")
+            case .layerStyleOuterGlow:
+                let color = commit ? colorPicker.color : colorPicker.original
+                var s = activeLayer?.styles ?? LayerStyles()
+                var effect = s.outerGlow ?? OuterGlowEffect()
+                effect.color = color
+                s.outerGlow = effect
+                setLayerStyles(s, actionName: "Outer Glow Color")
+            case .layerStyleDropShadow:
+                let color = commit ? colorPicker.color : colorPicker.original
+                var s = activeLayer?.styles ?? LayerStyles()
+                var effect = s.dropShadow ?? DropShadowEffect()
+                effect.color = color
+                s.dropShadow = effect
+                setLayerStyles(s, actionName: "Drop Shadow Color")
+            case .layerStyleColorOverlay:
+                let color = commit ? colorPicker.color : colorPicker.original
+                var s = activeLayer?.styles ?? LayerStyles()
+                var effect = s.colorOverlay ?? ColorOverlayEffect()
+                effect.color = color
+                s.colorOverlay = effect
+                setLayerStyles(s, actionName: "Color Overlay Color")
             }
         }
         colorPicker = nil
     }
+
     /// Opens the app's color picker on one end of the Gradient Map being edited (Shadows or Highlights).
     func openGradientMapColorPicker(highlights: Bool) {
         guard canEditPalette, colorPicker == nil, let edit = filterEdit, edit.kind == .gradientMap, !edit.committing else { return }
@@ -73,11 +148,69 @@ extension EditorSession {
         colorPicker = ColorPickerState(target: .gradientMap(highlights: highlights),
                                        original: PaletteColor(red: value.red, green: value.green, blue: value.blue))
     }
+
     /// While the picker is open on a Gradient Map end, the gradient (and canvas) follow its working color.
     func previewGradientMapColor() {
         guard let colorPicker, case .gradientMap(let highlights) = colorPicker.target else { return }
         setGradientMapColor(colorPicker.color, highlights: highlights)
     }
+
+    /// Live preview while editing in ColorPickerSheet for gradient map, text color, stroke color, or layer styles.
+    func previewColorPickerColor() {
+        guard let colorPicker else { return }
+        switch colorPicker.target {
+        case .gradientMap:
+            previewGradientMapColor()
+        case .palette(let background):
+            if tool == .text && !background {
+                textTextColor = colorPicker.color
+                if activeLayer?.liveText != nil {
+                    updateActiveText { $0.color = colorPicker.color }
+                }
+            }
+        case .textColor:
+            textTextColor = colorPicker.color
+            if activeLayer?.liveText != nil {
+                updateActiveText { $0.color = colorPicker.color }
+            }
+        case .textStrokeColor:
+            textStrokeRed = colorPicker.color.red
+            textStrokeGreen = colorPicker.color.green
+            textStrokeBlue = colorPicker.color.blue
+            if activeLayer?.liveText != nil {
+                updateActiveText {
+                    $0.strokeRed = colorPicker.color.red
+                    $0.strokeGreen = colorPicker.color.green
+                    $0.strokeBlue = colorPicker.color.blue
+                }
+            }
+        case .layerStyleStroke:
+            var s = activeLayer?.styles ?? LayerStyles()
+            var effect = s.stroke ?? StrokeEffect()
+            effect.color = colorPicker.color
+            s.stroke = effect
+            setLayerStyles(s, actionName: "Stroke Color")
+        case .layerStyleOuterGlow:
+            var s = activeLayer?.styles ?? LayerStyles()
+            var effect = s.outerGlow ?? OuterGlowEffect()
+            effect.color = colorPicker.color
+            s.outerGlow = effect
+            setLayerStyles(s, actionName: "Outer Glow Color")
+        case .layerStyleDropShadow:
+            var s = activeLayer?.styles ?? LayerStyles()
+            var effect = s.dropShadow ?? DropShadowEffect()
+            effect.color = colorPicker.color
+            s.dropShadow = effect
+            setLayerStyles(s, actionName: "Drop Shadow Color")
+        case .layerStyleColorOverlay:
+            var s = activeLayer?.styles ?? LayerStyles()
+            var effect = s.colorOverlay ?? ColorOverlayEffect()
+            effect.color = colorPicker.color
+            s.colorOverlay = effect
+            setLayerStyles(s, actionName: "Color Overlay Color")
+        }
+    }
+
     private func setGradientMapColor(_ color: PaletteColor, highlights: Bool) {
         guard let edit = filterEdit, edit.kind == .gradientMap, !edit.committing else { return }
         var settings = edit.settings
@@ -117,14 +250,27 @@ extension EditorSession {
     }
 }
 
-/// What the open color picker edits: a palette swatch, or one end of the Gradient Map being edited.
+/// What the open color picker edits: a palette swatch, text color, stroke color, layer style effect, or Gradient Map.
 enum ColorPickerTarget: Equatable {
     case palette(background: Bool)
     case gradientMap(highlights: Bool)
+    case textColor
+    case textStrokeColor
+    case layerStyleStroke
+    case layerStyleOuterGlow
+    case layerStyleDropShadow
+    case layerStyleColorOverlay
+
     var title: String {
         switch self {
         case .palette(let background): return background ? "Color Picker (Background Color)" : "Color Picker (Foreground Color)"
         case .gradientMap(let highlights): return highlights ? "Color Picker (Gradient Map Highlights)" : "Color Picker (Gradient Map Shadows)"
+        case .textColor: return "Color Picker (Text Color)"
+        case .textStrokeColor: return "Color Picker (Text Stroke Color)"
+        case .layerStyleStroke: return "Color Picker (Stroke Color)"
+        case .layerStyleOuterGlow: return "Color Picker (Outer Glow Color)"
+        case .layerStyleDropShadow: return "Color Picker (Drop Shadow Color)"
+        case .layerStyleColorOverlay: return "Color Picker (Color Overlay Color)"
         }
     }
 }
@@ -201,6 +347,27 @@ extension PaletteColor {
     /// Snaps to the 8-bit values that painting and export actually store.
     var quantized: PaletteColor {
         PaletteColor(red: (red * 255).rounded() / 255, green: (green * 255).rounded() / 255, blue: (blue * 255).rounded() / 255)
+    }
+
+    /// Color for use as the SwiftUI `ColorPicker` binding value.
+    ///
+    /// NSColorPanel (the native color wheel) renders fully black when the initial
+    /// color has brightness = 0 — the entire wheel appears as a solid black disk
+    /// and the user cannot pick any hue. This property ensures the wheel is always
+    /// visible by boosting brightness to a minimum of 15% while preserving hue and
+    /// saturation. The *actual* stored color is never modified; this is only a
+    /// display hint for the picker itself.
+    var swiftUIForPicker: Color {
+        let hsb = PickerHSB(self)
+        if hsb.brightness < 0.15 {
+            // Lift brightness so the hue wheel is visible; keep hue & sat intact.
+            let lifted = PickerHSB(hue: hsb.hue == 0 && hsb.saturation == 0 ? 0 : hsb.hue,
+                                   saturation: hsb.saturation,
+                                   brightness: 0.15)
+            let c = lifted.rgb
+            return Color(red: c.red, green: c.green, blue: c.blue)
+        }
+        return Color(red: red, green: green, blue: blue)
     }
     var hex: String {
         String(format: "%02X%02X%02X", Int((red * 255).rounded()), Int((green * 255).rounded()), Int((blue * 255).rounded()))

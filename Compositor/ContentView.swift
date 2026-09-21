@@ -11,6 +11,7 @@ struct ContentView: View {
     @State private var levelsPanel = FloatingPanelController(name: "levelsPanel")
     @State private var adjustmentPanel = FloatingPanelController(name: "adjustmentPanel")
     @State private var filterPanel = FloatingPanelController(name: "filterPanel")
+    @State private var layerStylesPanel = FloatingPanelController(name: "layerStylesPanel")
     @State private var isDropTargeted = false
     /// The window's width, so the tab strip can use the toolbar's free space.
     @State private var windowWidth: CGFloat = 1180
@@ -20,71 +21,11 @@ struct ContentView: View {
         return workspace.canReceiveDrag(into: workspace.current.id)
     }
     var body: some View {
-        VStack(spacing: 0) {
-            if session.tool == .move {
-                TransformInspector(session: session).id(session.activeLayerID)
-                Divider()
-            }
-            if session.tool.isBrushTool {
-                BrushControls(session: session)
-                Divider()
-            }
-            if session.tool.isSelectionTool {
-                LassoControls(session: session)
-                Divider()
-            }
-            if session.tool == .gradient {
-                GradientControls(session: session)
-                Divider()
-            }
-            if session.tool == .shape {
-                ShapeControls(session: session)
-                Divider()
-            }
-            if session.tool == .text {
-                TextControls(session: session)
-                Divider()
-            }
-            if session.tool == .eyedropper {
-                HStack(spacing: 16) {
-                    Text("Eyedropper").font(ToolHeaderStyle.titleFont)
-                    Toggle("Sample Ring", isOn: $session.showsSampleRing).toggleStyle(.checkbox)
-                    Spacer()
-                }.padding(.horizontal, 18).toolHeaderBar()
-                Divider()
-            }
-            if session.tool == .hand || session.tool == .zoom {
-                NavigationToolHeader(session: session)
-                Divider()
-            }
-            if session.tool == .crop {
-                CropControls(session: session)
-                Divider()
-            }
-            // No tool (A) keeps the header, so the canvas doesn't jump.
-            if session.tool == .idle {
-                HStack(spacing: 16) {
-                    Text("Select a tool").font(ToolHeaderStyle.titleFont)
-                    Spacer()
-                }.padding(.horizontal, 18).toolHeaderBar()
-                Divider()
-            }
-            HStack(spacing: 0) {
-                toolRail
-                Divider()
-                ZStack {
-                    EditorCanvas(session: session)
-                    if session.document == nil { welcome }
-                }
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("editor")) } action: { canvasFrame = $0 }
-                PanelResizeEdge(width: $layersPanelWidth, range: LayersPanel.widths)
-                LayersPanel(session: session, width: layersPanelWidth)
-            }
-            Divider()
-            // Keeps its own height however short the window gets; the tools scroll instead.
-            statusBar.fixedSize(horizontal: false, vertical: true)
-                .modifier(WidthReader(width: $windowWidth))
-        }
+        attachAlerts(to: attachPanels(to: mainEditorContent))
+    }
+
+    private var mainEditorContent: some View {
+        editorLayout
         .background(Color(white: 0.14))
         .background {
             if let applicationDelegate, applicationDelegate.projects.workspace == nil {
@@ -157,50 +98,143 @@ struct ContentView: View {
                 }.help("Zoom out (⌘−)").disabled(session.document == nil)
             }
         }
-        .onChange(of: session.levels == nil) { _, closed in
-            if closed { levelsPanel.close() }
-            else {
-                levelsPanel.onClose = { session.cancelLevels() }
-                levelsPanel.show(title: "Levels", content: LevelsSheet(session: session))
+    }
+
+    @ViewBuilder
+    private func attachPanels(to content: some View) -> some View {
+        content
+            .onChange(of: session.levels == nil) { _, closed in
+                if closed { levelsPanel.close() }
+                else {
+                    levelsPanel.onClose = { session.cancelLevels() }
+                    levelsPanel.show(title: "Levels", content: LevelsSheet(session: session))
+                }
             }
-        }
-        .onChange(of: session.hueSaturation == nil) { _, closed in
-            if closed { adjustmentPanel.close() }
-            else {
-                adjustmentPanel.onClose = { session.cancelHueSaturation() }
-                adjustmentPanel.show(title: "Hue/Saturation", content: HueSaturationSheet(session: session))
+            .onChange(of: session.hueSaturation == nil) { _, closed in
+                if closed { adjustmentPanel.close() }
+                else {
+                    adjustmentPanel.onClose = { session.cancelHueSaturation() }
+                    adjustmentPanel.show(title: "Hue/Saturation", content: HueSaturationSheet(session: session))
+                }
             }
-        }
-        .onChange(of: session.filterEdit == nil) { _, closed in
-            if closed { filterPanel.close() }
-            else {
-                filterPanel.onClose = { session.cancelFilter() }
-                filterPanel.show(title: session.filterEdit?.kind.rawValue ?? "Filter", content: FilterSheet(session: session))
+            .onChange(of: session.filterEdit == nil) { _, closed in
+                if closed { filterPanel.close() }
+                else {
+                    filterPanel.onClose = { session.cancelFilter() }
+                    filterPanel.show(title: session.filterEdit?.kind.rawValue ?? "Filter", content: FilterSheet(session: session))
+                }
             }
-        }
-        .onChange(of: session.document == nil) { _, empty in
-            if !empty { session.canvasFocusRequest += 1 }
-        }
-        .fileImporter(isPresented: $session.showsImporter,
-                      allowedContentTypes: [.jpeg, .png, .heic, .tiff], allowsMultipleSelection: true) { result in
-            switch result {
-            case .success(let urls): Task { await session.importImages(urls) }
-            case .failure(let error):
-                if (error as NSError).code != NSUserCancelledError { session.importError = error.localizedDescription }
+            .onChange(of: session.showsStylesInspector) { _, shows in
+                if shows {
+                    layerStylesPanel.onClose = { session.showsStylesInspector = false }
+                    layerStylesPanel.show(title: "Layer Styles", content: LayerStylesInspector(session: session))
+                } else {
+                    layerStylesPanel.close()
+                }
             }
+            .onChange(of: session.colorPicker?.color) { _, _ in
+                session.previewColorPickerColor()
+            }
+            .onChange(of: session.document == nil) { _, empty in
+                if empty {
+                    session.showsStylesInspector = false
+                } else {
+                    session.canvasFocusRequest += 1
+                }
+            }
+    }
+
+    @ViewBuilder
+    private func attachAlerts(to content: some View) -> some View {
+        content
+            .fileImporter(isPresented: $session.showsImporter,
+                          allowedContentTypes: [.jpeg, .png, .heic, .tiff], allowsMultipleSelection: true) { result in
+                switch result {
+                case .success(let urls): Task { await session.importImages(urls) }
+                case .failure(let error):
+                    if (error as NSError).code != NSUserCancelledError { session.importError = error.localizedDescription }
+                }
+            }
+            .alert("Import couldn’t finish", isPresented: Binding(
+                get: { session.importError != nil }, set: { if !$0 { session.importError = nil } })) {
+                    Button("OK", role: .cancel) { session.importError = nil }
+                } message: { Text(session.importError ?? "") }
+            .alert("Couldn’t paint", isPresented: Binding(get: { session.brushError != nil },
+                set: { if !$0 { session.brushError = nil } })) {
+                    Button("OK") { session.brushError = nil }
+                } message: { Text(session.brushError ?? "") }
+            .alert("Couldn’t crop", isPresented: Binding(get: { session.cropError != nil },
+                set: { if !$0 { session.cropError = nil } })) {
+                    Button("OK") { session.cropError = nil }
+                } message: { Text(session.cropError ?? "") }
+    }
+
+    private var editorLayout: some View {
+        VStack(spacing: 0) {
+            if session.tool == .move {
+                TransformInspector(session: session).id(session.activeLayerID)
+                Divider()
+            }
+            if session.tool.isBrushTool {
+                BrushControls(session: session)
+                Divider()
+            }
+            if session.tool.isSelectionTool {
+                LassoControls(session: session)
+                Divider()
+            }
+            if session.tool == .gradient {
+                GradientControls(session: session)
+                Divider()
+            }
+            if session.tool == .shape {
+                ShapeControls(session: session)
+                Divider()
+            }
+            if session.tool == .text {
+                TextControls(session: session)
+                Divider()
+            }
+            if session.tool == .eyedropper {
+                HStack(spacing: 16) {
+                    Text("Eyedropper").font(ToolHeaderStyle.titleFont)
+                    Toggle("Sample Ring", isOn: $session.showsSampleRing).toggleStyle(.checkbox)
+                    Spacer()
+                }.padding(.horizontal, 18).toolHeaderBar()
+                Divider()
+            }
+            if session.tool == .hand || session.tool == .zoom {
+                NavigationToolHeader(session: session)
+                Divider()
+            }
+            if session.tool == .crop {
+                CropControls(session: session)
+                Divider()
+            }
+            // No tool (A) keeps the header, so the canvas doesn't jump.
+            if session.tool == .idle {
+                HStack(spacing: 16) {
+                    Text("Select a tool").font(ToolHeaderStyle.titleFont)
+                    Spacer()
+                }.padding(.horizontal, 18).toolHeaderBar()
+                Divider()
+            }
+            HStack(spacing: 0) {
+                toolRail
+                Divider()
+                ZStack {
+                    EditorCanvas(session: session)
+                    if session.document == nil { welcome }
+                }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("editor")) } action: { canvasFrame = $0 }
+                PanelResizeEdge(width: $layersPanelWidth, range: LayersPanel.widths)
+                LayersPanel(session: session, width: layersPanelWidth)
+            }
+            Divider()
+            // Keeps its own height however short the window gets; the tools scroll instead.
+            statusBar.fixedSize(horizontal: false, vertical: true)
+                .modifier(WidthReader(width: $windowWidth))
         }
-        .alert("Import couldn’t finish", isPresented: Binding(
-            get: { session.importError != nil }, set: { if !$0 { session.importError = nil } })) {
-                Button("OK", role: .cancel) { session.importError = nil }
-            } message: { Text(session.importError ?? "") }
-        .alert("Couldn’t paint", isPresented: Binding(get: { session.brushError != nil },
-            set: { if !$0 { session.brushError = nil } })) {
-                Button("OK") { session.brushError = nil }
-            } message: { Text(session.brushError ?? "") }
-        .alert("Couldn’t crop", isPresented: Binding(get: { session.cropError != nil },
-            set: { if !$0 { session.cropError = nil } })) {
-                Button("OK") { session.cropError = nil }
-            } message: { Text(session.cropError ?? "") }
     }
     private func requestNewCanvas() {
         if let applicationDelegate { Task { await applicationDelegate.projects.newCanvas() } }

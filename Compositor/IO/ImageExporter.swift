@@ -41,8 +41,9 @@ actor ImageExporter {
                 guard let layer = records[id], let image = snapshot.images[id]?.image else { return }
                 let mask = snapshot.mask(for: layer).flatMap { $0.clipImage(placement: $0.placement, over: layer.transform, width: image.width, height: image.height) }
                 func drawLayer(_ mode: LayerBlendMode, _ into: CGContext) {
-                    LayerRenderer.draw(image, transform: layer.transform, center: layer.transform.center,
-                        opacity: layer.opacity ?? 1, blendMode: mode, mask: mask, in: into)
+                    let (renderImage, padding) = layer.styles.flatMap { LayerStyleRenderer.render(image: image, styles: $0) } ?? (image, 0)
+                    LayerRenderer.draw(renderImage, transform: layer.transform, center: layer.transform.center,
+                        opacity: layer.opacity ?? 1, blendMode: mode, mask: mask, padding: padding, in: into)
                 }
                 let mode = layer.blendMode ?? .normal
                 // Core Graphics blends these two wrong; see SeparableBlend.

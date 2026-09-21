@@ -111,19 +111,20 @@ struct TextControls: View {
             .fixedSize()
             .help("Text alignment")
 
-            // Color Swatch
-            HStack(spacing: 4) {
-                Button {
-                    session.openColorPicker(background: false)
-                } label: {
-                    let swatch = RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    swatch.fill(Color(nsColor: session.foregroundColor.nsColor))
-                        .overlay { swatch.strokeBorder(.black.opacity(0.5), lineWidth: 1) }
-                        .frame(width: 30, height: 18)
+            // Color Picker — native macOS colour wheel
+            ColorPicker("", selection: Binding(
+                get: { session.textTextColor.swiftUIForPicker },
+                set: { newColor in
+                    guard let nsCol = NSColor(newColor).usingColorSpace(.sRGB) else { return }
+                    let pc = PaletteColor(red: nsCol.redComponent, green: nsCol.greenComponent, blue: nsCol.blueComponent)
+                    session.textTextColor = pc
+                    if session.activeLayer?.liveText != nil {
+                        session.updateActiveText { $0.color = pc }
+                    }
                 }
-                .buttonStyle(.plain)
-                .help("Text color; click to change")
-            }
+            ), supportsOpacity: false)
+            .labelsHidden()
+            .help("Text color")
 
             // Stroke popover button
             StrokeToolbarButton(session: session)
@@ -190,6 +191,7 @@ struct TextControls: View {
             }
         }
         .onChange(of: session.foregroundColor) { _, newColor in
+            session.textTextColor = newColor
             if session.activeLayer?.liveText != nil {
                 session.updateActiveText {
                     $0.red = newColor.red
@@ -412,17 +414,22 @@ struct CharacterParagraphPanel: View {
                     .unitSuffix("pt")
                 }
 
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     Text("Color:").font(.caption).foregroundStyle(.secondary)
-                    Button {
-                        session.openColorPicker(background: false)
-                    } label: {
-                        let swatch = RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        swatch.fill(Color(nsColor: session.foregroundColor.nsColor))
-                            .overlay { swatch.strokeBorder(.black.opacity(0.5), lineWidth: 1) }
-                            .frame(height: 18)
-                    }
-                    .buttonStyle(.plain)
+                    ColorPicker("", selection: Binding(
+                        get: { session.textTextColor.swiftUIForPicker },
+                        set: { newColor in
+                            guard let nsCol = NSColor(newColor).usingColorSpace(.sRGB) else { return }
+
+                            let pc = PaletteColor(red: nsCol.redComponent, green: nsCol.greenComponent, blue: nsCol.blueComponent)
+                            session.textTextColor = pc
+                            if session.activeLayer?.liveText != nil {
+                                session.updateActiveText { $0.color = pc }
+                            }
+                        }
+                    ), supportsOpacity: false)
+                    .labelsHidden()
+                    .help("Text color")
                 }
             }
 
@@ -592,27 +599,30 @@ struct CharacterParagraphPanel: View {
                             .frame(width: 55, alignment: .trailing)
                             .gridColumnAlignment(.trailing)
 
-                        HStack(spacing: 8) {
-                            ColorPicker("", selection: Binding(
-                                get: { Color(red: session.textStrokeRed, green: session.textStrokeGreen, blue: session.textStrokeBlue) },
-                                set: { newColor in
-                                    if let nsColor = NSColor(newColor).usingColorSpace(.sRGB) {
-                                        session.textStrokeRed = nsColor.redComponent
-                                        session.textStrokeGreen = nsColor.greenComponent
-                                        session.textStrokeBlue = nsColor.blueComponent
-                                        if session.activeLayer?.liveText != nil {
-                                            session.updateActiveText {
-                                                $0.strokeRed = nsColor.redComponent
-                                                $0.strokeGreen = nsColor.greenComponent
-                                                $0.strokeBlue = nsColor.blueComponent
-                                            }
-                                        }
+                        ColorPicker("", selection: Binding(
+                            get: {
+                                PaletteColor(red: session.textStrokeRed,
+                                             green: session.textStrokeGreen,
+                                             blue: session.textStrokeBlue).swiftUIForPicker
+                            },
+                            set: { newColor in
+                                guard let nsCol = NSColor(newColor).usingColorSpace(.sRGB) else { return }
+
+                                let pc = PaletteColor(red: nsCol.redComponent, green: nsCol.greenComponent, blue: nsCol.blueComponent)
+                                session.textStrokeRed = pc.red
+                                session.textStrokeGreen = pc.green
+                                session.textStrokeBlue = pc.blue
+                                if session.activeLayer?.liveText != nil {
+                                    session.updateActiveText {
+                                        $0.strokeRed = pc.red
+                                        $0.strokeGreen = pc.green
+                                        $0.strokeBlue = pc.blue
                                     }
                                 }
-                            ))
-                            .labelsHidden()
-                            Spacer()
-                        }
+                            }
+                        ), supportsOpacity: false)
+                        .labelsHidden()
+                        .help("Stroke color")
                     }
                 }
             }
@@ -776,27 +786,30 @@ struct StrokeToolbarButton: View {
                             .frame(width: 55, alignment: .trailing)
                             .gridColumnAlignment(.trailing)
 
-                        HStack(spacing: 8) {
-                            ColorPicker("", selection: Binding(
-                                get: { Color(red: session.textStrokeRed, green: session.textStrokeGreen, blue: session.textStrokeBlue) },
-                                set: { newColor in
-                                    if let nsColor = NSColor(newColor).usingColorSpace(.sRGB) {
-                                        session.textStrokeRed = nsColor.redComponent
-                                        session.textStrokeGreen = nsColor.greenComponent
-                                        session.textStrokeBlue = nsColor.blueComponent
-                                        if session.activeLayer?.liveText != nil {
-                                            session.updateActiveText {
-                                                $0.strokeRed = nsColor.redComponent
-                                                $0.strokeGreen = nsColor.greenComponent
-                                                $0.strokeBlue = nsColor.blueComponent
-                                            }
-                                        }
+                        ColorPicker("", selection: Binding(
+                            get: {
+                                PaletteColor(red: session.textStrokeRed,
+                                             green: session.textStrokeGreen,
+                                             blue: session.textStrokeBlue).swiftUIForPicker
+                            },
+                            set: { newColor in
+                                guard let nsCol = NSColor(newColor).usingColorSpace(.sRGB) else { return }
+
+                                let pc = PaletteColor(red: nsCol.redComponent, green: nsCol.greenComponent, blue: nsCol.blueComponent)
+                                session.textStrokeRed = pc.red
+                                session.textStrokeGreen = pc.green
+                                session.textStrokeBlue = pc.blue
+                                if session.activeLayer?.liveText != nil {
+                                    session.updateActiveText {
+                                        $0.strokeRed = pc.red
+                                        $0.strokeGreen = pc.green
+                                        $0.strokeBlue = pc.blue
                                     }
                                 }
-                            ))
-                            .labelsHidden()
-                            Spacer()
-                        }
+                            }
+                        ), supportsOpacity: false)
+                        .labelsHidden()
+                        .help("Stroke color")
                     }
                 }
             }

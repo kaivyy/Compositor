@@ -85,4 +85,44 @@ extension EditorSession {
         document?.layers[index].blendMode = mode
         endEdit()
     }
+
+    func beginStyleEdit(_ name: String = "Layer Style") {
+        if isEditingText { endTextEdit(commitUndo: true) }
+        guard canEditAppearance, styleEditLayerID == nil, let id = activeLayerID else { return }
+        beginEdit(name)
+        styleEditLayerID = id
+    }
+
+    func finishStyleEdit() {
+        guard styleEditLayerID != nil else { return }
+        styleEditLayerID = nil
+        endEdit()
+    }
+
+    func setLayerStyles(_ styles: LayerStyles?, actionName: String = "Layer Style") {
+        if isEditingText { endTextEdit(commitUndo: true) }
+        guard canEditAppearance, let id = styleEditLayerID ?? activeLayerID,
+              let index = document?.layers.firstIndex(where: { $0.id == id }) else { return }
+        let standalone = styleEditLayerID == nil
+        if standalone { beginEdit(actionName) }
+        document?.layers[index].styles = styles
+        LayerStyleCache.shared.invalidate(layerID: id)
+        if standalone { endEdit() }
+        refreshCanvasPreview?()
+    }
+
+    func copyLayerStyles() {
+        guard canEditAppearance, let layer = activeLayer else { return }
+        copiedStyles = layer.styles
+    }
+
+    func pasteLayerStyles() {
+        guard canEditAppearance, let copiedStyles else { return }
+        setLayerStyles(copiedStyles, actionName: "Paste Layer Style")
+    }
+
+    func clearLayerStyles() {
+        guard canEditAppearance, activeLayer?.styles != nil else { return }
+        setLayerStyles(nil, actionName: "Clear Layer Style")
+    }
 }

@@ -41,6 +41,8 @@ nonisolated struct ProjectLayerRecord: Codable, Sendable {
     var shape: LayerShapeStyle? = nil
     /// A text layer's style, kept so the text can be edited and re-rendered.
     var text: LayerTextStyle? = nil
+    /// Non-destructive layer styles (stroke, glows, shadows, overlays).
+    var styles: LayerStyles? = nil
 }
 
 nonisolated struct ProjectSnapshot: @unchecked Sendable {

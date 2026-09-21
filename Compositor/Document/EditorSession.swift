@@ -3,7 +3,7 @@ import SwiftUI
 struct ImageLayer: Identifiable, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.name == rhs.name && lhs.isVisible == rhs.isVisible && lhs.transform == rhs.transform
-            && lhs.asset?.image === rhs.asset?.image && lhs.parentID == rhs.parentID && lhs.isGroup == rhs.isGroup && lhs.opacity == rhs.opacity && lhs.blendMode == rhs.blendMode && lhs.mask == rhs.mask && lhs.maskSourceID == rhs.maskSourceID && lhs.adjustment == rhs.adjustment && lhs.shape == rhs.shape && lhs.text == rhs.text
+            && lhs.asset?.image === rhs.asset?.image && lhs.parentID == rhs.parentID && lhs.isGroup == rhs.isGroup && lhs.opacity == rhs.opacity && lhs.blendMode == rhs.blendMode && lhs.mask == rhs.mask && lhs.maskSourceID == rhs.maskSourceID && lhs.adjustment == rhs.adjustment && lhs.shape == rhs.shape && lhs.text == rhs.text && lhs.styles == rhs.styles
     }
     let id: UUID
     var asset: ImportedImage?
@@ -22,6 +22,8 @@ struct ImageLayer: Identifiable, Equatable {
     var shape: LayerShape?
     /// Set on layers the Text tool made; see `liveText`.
     var text: LayerText?
+    /// Non-destructive layer styles (stroke, glows, shadows, overlays).
+    var styles: LayerStyles?
     var size: CGSize { transform.size }
 
     init(asset: ImportedImage, origin: CGPoint) {
@@ -38,7 +40,7 @@ struct ImageLayer: Identifiable, Equatable {
         self.name = name
     }
 
-    init(id: UUID, asset: ImportedImage?, name: String, isVisible: Bool, transform: LayerTransform, parentID: UUID? = nil, isGroup: Bool = false, opacity: Double = 1, blendMode: LayerBlendMode = .normal, mask: LayerMask? = nil, maskSourceID: UUID? = nil, adjustment: LayerAdjustment? = nil, shape: LayerShape? = nil, text: LayerText? = nil) {
+    init(id: UUID, asset: ImportedImage?, name: String, isVisible: Bool, transform: LayerTransform, parentID: UUID? = nil, isGroup: Bool = false, opacity: Double = 1, blendMode: LayerBlendMode = .normal, mask: LayerMask? = nil, maskSourceID: UUID? = nil, adjustment: LayerAdjustment? = nil, shape: LayerShape? = nil, text: LayerText? = nil, styles: LayerStyles? = nil) {
         self.id = id
         self.asset = asset
         self.name = name
@@ -53,6 +55,7 @@ struct ImageLayer: Identifiable, Equatable {
         self.adjustment = adjustment
         self.shape = shape
         self.text = text
+        self.styles = styles
     }
 }
 
@@ -102,6 +105,8 @@ final class EditorSession {
     var adjustmentOriginal: LayerAdjustment?
     var adjustmentEditingID: UUID? { didSet { resumeFileRequests() } }
     var projectURL: URL?
+    @ObservationIgnored var styleEditLayerID: UUID?
+    var copiedStyles: LayerStyles?
     /// Blocks overlapping edits immediately. Not observed by the UI: controls only dim via
     /// `showsBusy`, after an operation has run long enough to be worth showing, so quick
     /// edits (invert, fills, stroke commits) never flash the interface.
@@ -213,6 +218,7 @@ final class EditorSession {
     var shapeDraft: ShapeDraft?
     /// Type tool settings
     var textContent: String = ""
+    var textTextColor: PaletteColor = .white
     var textFontFamily: String = "Helvetica Neue"
     var textFontStyle: String = "Regular"
     var textFontSize: CGFloat = 36
@@ -466,6 +472,13 @@ final class EditorSession {
     }
     var showsNewDocument = false { didSet { resumeFileRequests() } }
     var showsImporter = false { didSet { resumeFileRequests() } }
+    var showsStylesInspector = false {
+        didSet {
+            if showsStylesInspector && isEditingText {
+                endTextEdit(commitUndo: true)
+            }
+        }
+    }
     var isImporting = false { didSet { resumeFileRequests() } }
     var importError: String? { didSet { resumeFileRequests() } }
     var opacityEditLayerID: UUID?

@@ -6,6 +6,10 @@ import AppKit
     @Test func defaultLayerTextStyleProperties() {
         let style = LayerTextStyle()
         #expect(style.text == "")
+        #expect(style.color == PaletteColor.white)
+        #expect(style.red == PaletteColor.white.red)
+        #expect(style.green == PaletteColor.white.green)
+        #expect(style.blue == PaletteColor.white.blue)
         #expect(style.fontFamily == "Helvetica Neue")
         #expect(style.fontStyle == "Regular")
         #expect(style.fontSize == 36)
@@ -20,6 +24,22 @@ import AppKit
         #expect(style.isUnderline == false)
         #expect(style.isStrikethrough == false)
         #expect(style.alignment == .left)
+    }
+
+    @Test func persistedSavedTextColorIsNotRecolored() throws {
+        // Encode a style that was saved with black text (or custom RGB)
+        var savedStyle = LayerTextStyle()
+        savedStyle.text = "Saved Text"
+        savedStyle.red = 0
+        savedStyle.green = 0
+        savedStyle.blue = 0
+        let encoded = try JSONEncoder().encode(savedStyle)
+
+        let decoded = try JSONDecoder().decode(LayerTextStyle.self, from: encoded)
+        #expect(decoded.color == PaletteColor.black)
+        #expect(decoded.red == 0)
+        #expect(decoded.green == 0)
+        #expect(decoded.blue == 0)
     }
 
     @Test func fontHelperReturnsInstalledFonts() {
