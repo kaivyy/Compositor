@@ -467,6 +467,7 @@ final class CanvasView: NSView {
             let transform: LayerTransform
         }
         let folderMasks: [FolderMask]
+        let liveTextPreviewID: UUID?
     }
 
     @discardableResult
@@ -495,7 +496,8 @@ final class CanvasView: NSView {
             folderMasks: (document?.layers ?? []).filter { $0.isGroup && $0.mask != nil }.map {
                 DisplayState.FolderMask(id: $0.id, maskID: $0.mask?.enabledImage.map { ObjectIdentifier($0) },
                                         transform: session.displayedTransform(for: $0))
-            })
+            },
+            liveTextPreviewID: session.liveTextEffectsPreview?.id)
         var changed = false
         if displayedState != state {
             if let previous = displayedState, previous.documentID == state.documentID,
@@ -778,7 +780,26 @@ final class CanvasView: NSView {
         }
         let byID = Dictionary(uniqueKeysWithValues: document.layers.map { ($0.id, $0) })
         func drawOwn(_ id: UUID, _ context: CGContext) {
-            guard let layer = byID[id], layer.id != session.textDraft?.layerID else { return }
+            guard let layer = byID[id] else { return }
+            if layer.id == session.textDraft?.layerID {
+                if let preview = session.liveTextEffectsPreview, preview.layerID == layer.id {
+                    let grown = preview.transform
+                    let mode = blendMode(of: layer)
+                    let opacity = layer.effectiveOpacity(in: byID)
+                    if !preview.passes.isEmpty {
+                        for pass in preview.passes {
+                            let passMode = pass.blendMode ?? mode
+                            let passOpacity = opacity * pass.opacity
+                            LayerRenderer.draw(pass.image, transform: grown, center: center(grown.center), scale: scale,
+                                opacity: passOpacity, blendMode: passMode, mask: nil, in: context)
+                        }
+                    } else {
+                        LayerRenderer.draw(preview.image, transform: grown, center: center(grown.center), scale: scale,
+                            opacity: opacity, blendMode: mode, mask: nil, in: context)
+                    }
+                }
+                return
+            }
             // A folder the layer sits in dims it along with everything else inside (see LayerOpacity).
             let opacity = layer.effectiveOpacity(in: byID)
             let mode = session.displayedBlendMode(for: layer)
@@ -961,6 +982,18 @@ final class CanvasView: NSView {
             let origin = center(transform.center)
             return { clip.apply(scale: scale, center: origin, in: $0) }
         }, in: context) { live.drawComposite($0, in: context) }
+        if let preview = session.liveTextEffectsPreview, preview.layerID == nil {
+            let grown = preview.transform
+            if !preview.passes.isEmpty {
+                for pass in preview.passes {
+                    LayerRenderer.draw(pass.image, transform: grown, center: center(grown.center), scale: scale,
+                        opacity: pass.opacity, blendMode: pass.blendMode ?? .normal, mask: nil, in: context)
+                }
+            } else {
+                LayerRenderer.draw(preview.image, transform: grown, center: center(grown.center), scale: scale,
+                    opacity: 1, blendMode: .normal, mask: nil, in: context)
+            }
+        }
     }
 
     /// The shape being dragged out with the Shape tool, drawn in the color it will be made in.

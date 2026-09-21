@@ -64,6 +64,16 @@ struct TextDraft: Identifiable {
     var style: LayerTextStyle
 }
 
+struct LiveTextEffectsPreview: @unchecked Sendable, Identifiable {
+    let id = UUID()
+    let layerID: UUID?
+    let draftID: UUID
+    let image: CGImage
+    let transform: LayerTransform
+    let inset: CGFloat
+    let passes: [EffectPass]
+}
+
 extension EditorSession {
     func beginText(at point: CGPoint, newLayer: Bool = false) {
         guard canEditLayers, textDraft == nil, let document, point.x.isFinite, point.y.isFinite else { return }
@@ -85,12 +95,14 @@ extension EditorSession {
         }
         tool = .type
         textDraft = TextDraft(documentID: document.id, layerID: target?.id, origin: target?.origin ?? point, transform: target?.transform, style: style)
+        scheduleLiveTextEffectsPreview()
     }
 
     func editActiveText() {
         guard canEditLayers, textDraft == nil, let document, let layer = activeLayer, let text = layer.liveText else { return }
         tool = .type
         textDraft = TextDraft(documentID: document.id, layerID: layer.id, origin: layer.origin, transform: layer.transform, style: text.style)
+        scheduleLiveTextEffectsPreview()
     }
 
     @discardableResult
@@ -188,11 +200,141 @@ extension EditorSession {
             change(&draft.style)
             guard draft.style.isValid else { return }
             textDraft = draft
+            scheduleLiveTextEffectsPreview()
         } else {
             var style = textDefaults
             change(&style)
             if style.isValid { textDefaults = style }
         }
+    }
+
+    func scheduleLiveTextEffectsPreview() {
+        liveTextPreviewWorkItem?.cancel()
+        guard let draft = textDraft else {
+            liveTextEffectsPreview = nil
+            return
+        }
+        let trimmed = draft.style.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            liveTextEffectsPreview = nil
+            return
+        }
+        let targetEffects: LayerEffects? = {
+            if let id = draft.layerID, let layer = document?.layers.first(where: { $0.id == id }) {
+                return (effectsEditing?.layerID == id ? editingEffects : layer.effects)?.visible
+            }
+            if effectsEditing != nil {
+                return editingEffects.visible
+            }
+            return nil
+        }()
+        guard let effects = targetEffects, !effects.isEmpty, effects.isValid else {
+            liveTextEffectsPreview = nil
+            return
+        }
+        let layerID = draft.layerID
+        let style = draft.style
+        let draftID = draft.id
+        let targetLayer = document?.layers.first(where: { $0.id == layerID })
+        let assetWidth = targetLayer?.asset?.image.width
+        let assetHeight = targetLayer?.asset?.image.height
+        let baseTransform = draft.transform ?? targetLayer?.transform ?? LayerTransform(origin: draft.origin, size: EditorSession.textBoxSize(style))
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let image = try? EditorSession.textImage(style) else { return }
+            guard let rendered = try? LayerEffectsRenderer.renderPasses(image, mask: nil, effects: effects) else { return }
+
+            var transform = baseTransform
+            let anchor = transform.point(.zero)
+            if style.boxSize == nil, let assetWidth, let assetHeight, assetWidth > 0, assetHeight > 0 {
+                transform.size = CGSize(width: CGFloat(image.width) * transform.size.width / CGFloat(assetWidth),
+                                        height: CGFloat(image.height) * transform.size.height / CGFloat(assetHeight))
+                let moved = transform.point(.zero)
+                transform.origin.x += anchor.x - moved.x
+                transform.origin.y += anchor.y - moved.y
+            } else if style.boxSize == nil {
+                transform.size = CGSize(width: image.width, height: image.height)
+            }
+            let grown = LayerEffectsRenderer.placed(transform, image: rendered.image, inset: rendered.inset)
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.textDraft?.id == draftID else { return }
+                self.liveTextEffectsPreview = LiveTextEffectsPreview(
+                    layerID: layerID,
+                    draftID: draftID,
+                    image: rendered.image,
+                    transform: grown,
+                    inset: rendered.inset,
+                    passes: rendered.passes
+                )
+            }
+        }
+        liveTextPreviewWorkItem = workItem
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.04, execute: workItem)
+    }
+
+    func updateLiveTextEffectsPreviewNow() {
+        liveTextPreviewWorkItem?.cancel()
+        liveTextPreviewWorkItem = nil
+        guard let draft = textDraft else {
+            liveTextEffectsPreview = nil
+            return
+        }
+        let trimmed = draft.style.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            liveTextEffectsPreview = nil
+            return
+        }
+        let targetEffects: LayerEffects? = {
+            if let id = draft.layerID, let layer = document?.layers.first(where: { $0.id == id }) {
+                return (effectsEditing?.layerID == id ? editingEffects : layer.effects)?.visible
+            }
+            if effectsEditing != nil {
+                return editingEffects.visible
+            }
+            return nil
+        }()
+        guard let effects = targetEffects, !effects.isEmpty, effects.isValid else {
+            liveTextEffectsPreview = nil
+            return
+        }
+        let layerID = draft.layerID
+        let style = draft.style
+        let draftID = draft.id
+        let targetLayer = document?.layers.first(where: { $0.id == layerID })
+        let assetWidth = targetLayer?.asset?.image.width
+        let assetHeight = targetLayer?.asset?.image.height
+        let baseTransform = draft.transform ?? targetLayer?.transform ?? LayerTransform(origin: draft.origin, size: EditorSession.textBoxSize(style))
+
+        guard let image = try? EditorSession.textImage(style) else { return }
+        guard let rendered = try? LayerEffectsRenderer.renderPasses(image, mask: nil, effects: effects) else { return }
+
+        var transform = baseTransform
+        let anchor = transform.point(.zero)
+        if style.boxSize == nil, let assetWidth, let assetHeight, assetWidth > 0, assetHeight > 0 {
+            transform.size = CGSize(width: CGFloat(image.width) * transform.size.width / CGFloat(assetWidth),
+                                    height: CGFloat(image.height) * transform.size.height / CGFloat(assetHeight))
+            let moved = transform.point(.zero)
+            transform.origin.x += anchor.x - moved.x
+            transform.origin.y += anchor.y - moved.y
+        } else if style.boxSize == nil {
+            transform.size = CGSize(width: image.width, height: image.height)
+        }
+        let grown = LayerEffectsRenderer.placed(transform, image: rendered.image, inset: rendered.inset)
+        self.liveTextEffectsPreview = LiveTextEffectsPreview(
+            layerID: layerID,
+            draftID: draftID,
+            image: rendered.image,
+            transform: grown,
+            inset: rendered.inset,
+            passes: rendered.passes
+        )
+    }
+
+    func clearLiveTextEffectsPreview() {
+        liveTextPreviewWorkItem?.cancel()
+        liveTextPreviewWorkItem = nil
+        liveTextEffectsPreview = nil
     }
 
     /// A text layer's name: its first words on one line. Line breaks and runs of spaces become single spaces, so a

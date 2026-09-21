@@ -174,6 +174,7 @@ final class InlineTextEditor: NSView, NSTextViewDelegate {
         draft.style.content = textView.string
         shownStyle = draft.style
         session.textDraft = draft
+        session.scheduleLiveTextEffectsPreview()
         // NSTextView draws the changed glyphs itself. Refresh the box's overflow marker
         // without resetting the text container's geometry on every keystroke.
         needsDisplay = true
