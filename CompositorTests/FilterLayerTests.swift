@@ -309,6 +309,58 @@ struct FilterLayerTests {
             try await ProjectStore.shared.save(ProjectSnapshot(manifest: invalidSettingsManifest, images: [:]), to: url)
         }
     }
+
+    @Test func filterLayerUIEditingLifecycleAndCancel() async throws {
+        let s = EditorSession(); s.createDocument(width: 10, height: 10)
+        s.addFilterLayer(.gaussianBlur)
+        let id = try #require(s.activeLayerID)
+        #expect(s.filterEditingID == id)
+
+        // Begin UI editing session
+        await s.beginFilterEditing(id)
+        #expect(s.filterEdit != nil)
+        #expect(s.filterEditingOriginal?.kind == .gaussianBlur)
+        #expect(s.filterEdit?.kind == .gaussianBlur)
+
+        // Update settings via UI filter edit
+        var newSettings = FilterSettings()
+        newSettings.radius = 42
+        s.updateFilter(newSettings, preview: true)
+        #expect(s.activeLayer?.filter?.settings.radius == 42)
+
+        // Commit filter editing
+        await s.commitFilter()
+        #expect(s.filterEdit == nil)
+        #expect(s.filterEditingID == nil)
+        #expect(s.filterEditingOriginal == nil)
+        #expect(s.activeLayer?.filter?.settings.radius == 42)
+
+        // Re-open for editing
+        s.filterEditingID = id
+        await s.beginFilterEditing(id)
+        #expect(s.filterEdit != nil)
+        #expect(s.filterEdit?.settings.radius == 42)
+
+        // Modify and cancel
+        var cancelSettings = FilterSettings()
+        cancelSettings.radius = 88
+        s.updateFilter(cancelSettings, preview: true)
+        #expect(s.activeLayer?.filter?.settings.radius == 88)
+
+        s.cancelFilter()
+        #expect(s.filterEdit == nil)
+        #expect(s.filterEditingID == nil)
+        #expect(s.filterEditingOriginal == nil)
+        #expect(s.activeLayer?.filter?.settings.radius == 42) // Restored original!
+
+        // Undo edit: reverts back to initial radius (10)
+        s.undo()
+        #expect(s.activeLayer?.filter?.settings.radius == 10)
+
+        // Redo edit: restores 42
+        s.redo()
+        #expect(s.activeLayer?.filter?.settings.radius == 42)
+    }
 }
 
 private extension CGImage {

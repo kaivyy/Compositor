@@ -99,7 +99,7 @@ struct FilterSheet: View {
             if let error = edit?.previewError {
                 Text(error).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
-            if session.adjustmentOriginal == nil && session.selection != nil {
+            if session.adjustmentOriginal == nil && session.filterEditingOriginal == nil && session.selection != nil {
                 Text("Limited to the selection").font(.callout).foregroundStyle(.secondary)
             }
             Divider()

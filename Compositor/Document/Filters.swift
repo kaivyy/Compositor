@@ -343,6 +343,7 @@ extension EditorSession {
             catch { brushError = error.localizedDescription }
         }
         if previewAdjustmentEditing(preview: preview) { return }
+        if previewFilterEditing(preview: preview) { return }
         if edit.kind.isAutomatic, edit.preparedPreview != nil, edit.preparedSettings == edit.settings { brushRevision += 1; return }
         guard preview else {
             edit.pending = nil; edit.preparedPreview = nil; brushRevision += 1
@@ -377,6 +378,7 @@ extension EditorSession {
         // A Gradient Map color still being picked goes with the panel.
         if case .gradientMap = colorPicker?.target { closeColorPicker(commit: false) }
         if finishAdjustmentEditing(commit: false) { return }
+        if finishFilterEditing(commit: false) { return }
         guard let edit = filterEdit, !edit.committing else { return }
         edit.previewTask?.cancel()
         filterEdit = nil
@@ -386,6 +388,7 @@ extension EditorSession {
     func commitFilter() async {
         if case .gradientMap = colorPicker?.target { closeColorPicker(commit: true) }
         if finishAdjustmentEditing(commit: true) { return }
+        if finishFilterEditing(commit: true) { return }
         guard let edit = filterEdit, !edit.committing else { return }
         if edit.kind.isAutomatic {
             await edit.previewTask?.value

@@ -265,6 +265,14 @@ struct CompositorApp: App {
                     Button("Edit Adjustment…") {
                         session.adjustmentEditingID = session.activeLayerID
                     }.disabled(!session.canEditLayers || session.activeLayer?.adjustment == nil)
+                    Menu("New Filter Layer") {
+                        ForEach(FilterLayerKind.allCases, id: \.self) { kind in
+                            Button(kind.rawValue + (kind.isEditable ? "…" : "")) { session.addFilterLayer(kind) }
+                        }
+                    }.disabled(!session.canEditLayers || session.document == nil)
+                    Button("Edit Filter…") {
+                        session.filterEditingID = session.activeLayerID
+                    }.disabled(!session.canEditLayers || session.activeLayer?.filter?.kind.isEditable != true)
                     Divider()
                     Button(session.canTransformSelection ? "Transform Selection" : "Transform Layer") { session.transformCommand() }
                         .configuredKeyboardShortcut("t").disabled(!session.canTransform && !session.canTransformSelection)

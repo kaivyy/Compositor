@@ -74,7 +74,7 @@ struct NativeLayerList: NSViewRepresentable {
             } else {
                 // Selection never reloads cells or recreates thumbnails.
                 let changed = IndexSet(next.indices.filter {
-                    editableChanged || expansionChanged || (old[$0].name != next[$0].name || old[$0].isVisible != next[$0].isVisible || old[$0].size != next[$0].size || old[$0].parentID != next[$0].parentID || old[$0].isGroup != next[$0].isGroup || old[$0].asset?.image !== next[$0].asset?.image || (old[$0].liveText != nil) != (next[$0].liveText != nil) || old[$0].effects != next[$0].effects || old[$0].mask != next[$0].mask || old[$0].maskSourceID != next[$0].maskSourceID) || previousDetails[next[$0].id]?.depth != rowDetails[next[$0].id]?.depth || previousDetails[next[$0].id]?.visible != rowDetails[next[$0].id]?.visible
+                    editableChanged || expansionChanged || (old[$0].name != next[$0].name || old[$0].isVisible != next[$0].isVisible || old[$0].size != next[$0].size || old[$0].parentID != next[$0].parentID || old[$0].isGroup != next[$0].isGroup || old[$0].asset?.image !== next[$0].asset?.image || (old[$0].liveText != nil) != (next[$0].liveText != nil) || old[$0].effects != next[$0].effects || old[$0].mask != next[$0].mask || old[$0].maskSourceID != next[$0].maskSourceID || old[$0].adjustment != next[$0].adjustment || old[$0].filter != next[$0].filter) || previousDetails[next[$0].id]?.depth != rowDetails[next[$0].id]?.depth || previousDetails[next[$0].id]?.visible != rowDetails[next[$0].id]?.visible
                 })
                 let resized = IndexSet(next.indices.filter { (old[$0].effects?.kinds.count ?? 0) != (next[$0].effects?.kinds.count ?? 0) })
                 // Adding or removing an effect only changes how tall a row is. Left to AppKit that is animated, and
@@ -144,6 +144,7 @@ struct NativeLayerList: NSViewRepresentable {
             if cell?.isOnControl(point) == true {
                 if rows[table.clickedRow].liveText != nil { session.editActiveText(); return }
                 if rows[table.clickedRow].adjustment?.kind.isEditable == true { session.adjustmentEditingID = id; return }
+                if rows[table.clickedRow].filter?.kind.isEditable == true { session.filterEditingID = id; return }
             }
             session.renamingLayerID = id
         }
@@ -636,13 +637,14 @@ private final class LayerCell: NSTableCellView, NSTextFieldDelegate {
         // editable text, adjustments and folders keep a square icon. Pictures redraw only when what they show changes.
         let canvas = session.document?.size ?? CGSize(width: 1, height: 1)
         let editableText = layer.liveText != nil
-        let framed = layer.adjustment == nil && !layer.isGroup && !editableText
+        let framed = layer.adjustment == nil && layer.filter == nil && !layer.isGroup && !editableText
         let layerSize = framed ? CanvasThumbnail.fittedSize(canvas: canvas, box: 36) : CGSize(width: 36, height: 36)
         thumbnailWidth.constant = layerSize.width
         thumbnailHeight.constant = layerSize.height
         let key = ThumbnailKey(image: layer.asset.map { ObjectIdentifier($0.thumbnail) }, transform: layer.transform, canvas: canvas, editableText: editableText)
         if layerID != layer.id || thumbnailKey != key {
             thumbnail.image = layer.adjustment.map { Self.adjustmentIcon($0.kind.symbol, description: $0.kind.rawValue, quarterTurnClockwise: $0.kind == .curves) }
+                ?? layer.filter.map { Self.adjustmentIcon($0.kind.symbol, description: $0.kind.rawValue, quarterTurnClockwise: $0.kind == .curves) }
                 ?? (layer.isGroup ? Self.folderIcon
                     : editableText ? Self.adjustmentIcon("textformat", description: "Editable text")
                     : CanvasThumbnail.layer(layer.asset?.thumbnail, transform: layer.transform, canvas: canvas, box: 36))
@@ -663,7 +665,7 @@ private final class LayerCell: NSTableCellView, NSTextFieldDelegate {
         disabledMaskMark.isHidden = layer.mask?.isEnabled != false
         thumbnail.isEnabled = !session.showsBusy && !session.isImporting
         maskThumbnail.isEnabled = thumbnail.isEnabled
-        let linkable = layer.mask != nil && layer.adjustment == nil && !layer.isGroup
+        let linkable = layer.mask != nil && layer.adjustment == nil && layer.filter == nil && !layer.isGroup
         maskGap.constant = linkable ? 13 : 5
         linkButton.isHidden = !linkable
         linkButton.image = layer.mask?.isLinked == false ? nil : Self.linkImage
@@ -680,7 +682,7 @@ private final class LayerCell: NSTableCellView, NSTextFieldDelegate {
         // A reused cell must not carry another row's half-finished rename.
         if renaming, layerID != layer.id { restoreLabel() }
         if !renaming { nameLabel.stringValue = (layer.maskSourceID == nil ? "" : "↳ ") + layer.name }
-        dimensions.stringValue = layer.liveText != nil ? "Text" : layer.adjustment != nil ? "Adjustment · Double-click to edit" : layer.isGroup ? "Folder" : "\(Int(layer.size.width.rounded())) × \(Int(layer.size.height.rounded())) px"
+        dimensions.stringValue = layer.liveText != nil ? "Text" : layer.adjustment != nil ? "Adjustment · Double-click to edit" : layer.filter != nil ? (layer.filter?.kind.isEditable == true ? "Filter · Double-click to edit" : "Filter") : layer.isGroup ? "Folder" : "\(Int(layer.size.width.rounded())) × \(Int(layer.size.height.rounded())) px"
         if let source = layer.maskSourceID {
             let sourceName = session.document?.layers.first(where: { $0.id == source })?.name ?? "Missing source"
             dimensions.stringValue = "Clipped to \(sourceName)"

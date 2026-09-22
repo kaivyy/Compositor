@@ -47,11 +47,18 @@ struct LayersPanel: View {
                     .help("Layer effects: stroke and drop shadow").accessibilityLabel("Layer effects")
                     .accessibilityIdentifier("layerEffects").disabled(!session.canEditEffects)
                 Menu {
-                    ForEach(AdjustmentKind.allCases, id: \.self) { kind in
-                        Button(kind.rawValue) { session.addAdjustment(kind) }
+                    Section("Adjustments") {
+                        ForEach(AdjustmentKind.allCases, id: \.self) { kind in
+                            Button(kind.rawValue) { session.addAdjustment(kind) }
+                        }
+                    }
+                    Section("Filters") {
+                        ForEach(FilterLayerKind.allCases, id: \.self) { kind in
+                            Button(kind.rawValue) { session.addFilterLayer(kind) }
+                        }
                     }
                 } label: { Image(systemName: "circle.lefthalf.filled").footerHitArea() }
-                    .menuStyle(.borderlessButton).fixedSize().help("New adjustment layer").disabled(!session.canEditLayers)
+                    .menuStyle(.borderlessButton).fixedSize().help("New adjustment or filter layer").disabled(!session.canEditLayers)
                 Spacer()
                 Button { session.deleteLayerOrMask() } label: { Image(systemName: "trash").footerHitArea() }
                     .help(session.selectedEffect != nil ? "Delete selected effect" : session.isMaskSelected ? "Delete layer mask" : session.selectedLayerIDs.count > 1 ? "Delete selected layers" : "Delete selected layer")
@@ -66,6 +73,9 @@ struct LayersPanel: View {
         .frame(width: width)
         .task(id: session.adjustmentEditingID) {
             if let id = session.adjustmentEditingID { await session.beginAdjustmentEditing(id) }
+        }
+        .task(id: session.filterEditingID) {
+            if let id = session.filterEditingID { await session.beginFilterEditing(id) }
         }
     }
 
