@@ -111,6 +111,8 @@ final class EditorSession {
     var effectsEditingOriginal: LayerEffects?
     var effectSelection: LayerEffectSelection?
     @ObservationIgnored var effectsPreviews = EffectsPreviewCache()
+    var liveTextEffectsPreview: LiveTextEffectsPreview?
+    @ObservationIgnored var liveTextPreviewWorkItem: DispatchWorkItem?
     var projectURL: URL?
     /// Blocks overlapping edits immediately. Not observed by the UI: controls only dim via
     /// `showsBusy`, after an operation has run long enough to be worth showing, so quick
@@ -230,7 +232,14 @@ final class EditorSession {
     var lassoDraft: LassoDraft?
     var lassoKind = LassoKind.freehand
     var marqueeKind = LassoKind.rectangle
-    var textDraft: TextDraft? { didSet { if oldValue != nil && textDraft == nil { resumeFileRequests() } } }
+    var textDraft: TextDraft? {
+        didSet {
+            if oldValue != nil && textDraft == nil {
+                clearLiveTextEffectsPreview()
+                resumeFileRequests()
+            }
+        }
+    }
     var textDefaults = LayerTextStyle()
     var shapeKind = ShapeKind.rectangle
     /// Corner radius in pixels for rectangles the Shape tool draws; 0 keeps the corners square.

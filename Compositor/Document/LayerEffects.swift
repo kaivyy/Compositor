@@ -589,6 +589,9 @@ extension EditorSession {
         var effects = layer.effects ?? LayerEffects()
         change(&effects)
         setEffects(effects, on: layer.id, name: "Edit Layer Effects")
+        if textDraft != nil {
+            scheduleLiveTextEffectsPreview()
+        }
     }
 
     func canCopyEffect(_ kind: LayerEffectKind, from source: UUID, to target: UUID) -> Bool {

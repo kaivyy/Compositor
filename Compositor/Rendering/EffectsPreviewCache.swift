@@ -136,6 +136,12 @@ final class EffectsPreviewCache {
         effects.stroke?.size *= factor
         effects.shadow?.distance *= factor
         effects.shadow?.blur *= factor
+        effects.shadow?.spread *= factor
+        effects.outerGlow?.size *= factor
+        effects.innerGlow?.size *= factor
+        effects.innerShadow?.distance *= factor
+        effects.innerShadow?.blur *= factor
+        effects.innerShadow?.choke *= factor
         let rendered = try LayerEffectsRenderer.renderPasses(pixels, mask: mask, effects: effects)
         return Result(image: rendered.image, inset: rendered.inset, passes: rendered.passes)
     }
