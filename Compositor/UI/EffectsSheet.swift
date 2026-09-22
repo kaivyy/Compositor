@@ -75,6 +75,9 @@ struct EffectsSheet: View {
             slider("Distance", value: Binding(get: { effect.distance }, set: { distance in
                 session.changeEffects { $0.shadow?.distance = distance }
             }), range: 0...100, inputRange: 0...5000, unit: "px")
+            slider("Spread", value: Binding(get: { effect.spread }, set: { spread in
+                session.changeEffects { $0.shadow?.spread = spread }
+            }), range: 0...50, inputRange: 0...500, unit: "px")
             slider("Blur", value: Binding(get: { effect.blur }, set: { blur in
                 session.changeEffects { $0.shadow?.blur = blur }
             }), range: 0...100, inputRange: 0...500, unit: "px")
@@ -112,6 +115,9 @@ struct EffectsSheet: View {
             slider("Distance", value: Binding(get: { effect.distance }, set: { distance in
                 session.changeEffects { $0.innerShadow?.distance = distance }
             }), range: 0...50, inputRange: 0...5000, unit: "px")
+            slider("Choke", value: Binding(get: { effect.choke }, set: { choke in
+                session.changeEffects { $0.innerShadow?.choke = choke }
+            }), range: 0...50, inputRange: 0...500, unit: "px")
             slider("Blur", value: Binding(get: { effect.blur }, set: { blur in
                 session.changeEffects { $0.innerShadow?.blur = blur }
             }), range: 0...100, inputRange: 0...500, unit: "px")

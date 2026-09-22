@@ -94,6 +94,7 @@ nonisolated struct ShadowEffect: Codable, Equatable, Sendable {
     var angle: CGFloat = 90
     var distance: CGFloat = 20
     var blur: CGFloat = 20
+    var spread: CGFloat = 0
     var red: CGFloat = 0
     var green: CGFloat = 0
     var blue: CGFloat = 0
@@ -106,10 +107,53 @@ nonisolated struct ShadowEffect: Codable, Equatable, Sendable {
         return CGSize(width: -cos(radians) * distance, height: sin(radians) * distance)
     }
     var isValid: Bool {
-        [angle, distance, blur].allSatisfy(\.isFinite) && (-360...360).contains(angle)
-            && (0...5000).contains(distance) && (0...500).contains(blur)
+        [angle, distance, blur, spread].allSatisfy(\.isFinite) && (-360...360).contains(angle)
+            && (0...5000).contains(distance) && (0...500).contains(blur) && (0...500).contains(spread)
             && opacity.isFinite && (0...1).contains(opacity)
             && [red, green, blue].allSatisfy { $0.isFinite && (0...1).contains($0) }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, angle, distance, blur, spread, red, green, blue, opacity
+    }
+
+    init(enabled: Bool? = nil, angle: CGFloat = 90, distance: CGFloat = 20, blur: CGFloat = 20, spread: CGFloat = 0,
+         red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, opacity: Double = 0.5) {
+        self.enabled = enabled
+        self.angle = angle
+        self.distance = distance
+        self.blur = blur
+        self.spread = spread
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.opacity = opacity
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
+        self.angle = try container.decodeIfPresent(CGFloat.self, forKey: .angle) ?? 90
+        self.distance = try container.decodeIfPresent(CGFloat.self, forKey: .distance) ?? 20
+        self.blur = try container.decodeIfPresent(CGFloat.self, forKey: .blur) ?? 20
+        self.spread = try container.decodeIfPresent(CGFloat.self, forKey: .spread) ?? 0
+        self.red = try container.decodeIfPresent(CGFloat.self, forKey: .red) ?? 0
+        self.green = try container.decodeIfPresent(CGFloat.self, forKey: .green) ?? 0
+        self.blue = try container.decodeIfPresent(CGFloat.self, forKey: .blue) ?? 0
+        self.opacity = try container.decodeIfPresent(Double.self, forKey: .opacity) ?? 0.5
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(enabled, forKey: .enabled)
+        try container.encode(angle, forKey: .angle)
+        try container.encode(distance, forKey: .distance)
+        try container.encode(blur, forKey: .blur)
+        try container.encode(spread, forKey: .spread)
+        try container.encode(red, forKey: .red)
+        try container.encode(green, forKey: .green)
+        try container.encode(blue, forKey: .blue)
+        try container.encode(opacity, forKey: .opacity)
     }
 }
 
@@ -134,6 +178,7 @@ nonisolated struct InnerShadowEffect: Codable, Equatable, Sendable {
     var angle: CGFloat = 90
     var distance: CGFloat = 10
     var blur: CGFloat = 10
+    var choke: CGFloat = 0
     var red: CGFloat = 0
     var green: CGFloat = 0
     var blue: CGFloat = 0
@@ -145,10 +190,53 @@ nonisolated struct InnerShadowEffect: Codable, Equatable, Sendable {
         return CGSize(width: -cos(radians) * distance, height: sin(radians) * distance)
     }
     var isValid: Bool {
-        [angle, distance, blur].allSatisfy(\.isFinite) && (-360...360).contains(angle)
-            && (0...5000).contains(distance) && (0...500).contains(blur)
+        [angle, distance, blur, choke].allSatisfy(\.isFinite) && (-360...360).contains(angle)
+            && (0...5000).contains(distance) && (0...500).contains(blur) && (0...500).contains(choke)
             && opacity.isFinite && (0...1).contains(opacity)
             && [red, green, blue].allSatisfy { $0.isFinite && (0...1).contains($0) }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, angle, distance, blur, choke, red, green, blue, opacity
+    }
+
+    init(enabled: Bool? = nil, angle: CGFloat = 90, distance: CGFloat = 10, blur: CGFloat = 10, choke: CGFloat = 0,
+         red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, opacity: Double = 0.5) {
+        self.enabled = enabled
+        self.angle = angle
+        self.distance = distance
+        self.blur = blur
+        self.choke = choke
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.opacity = opacity
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
+        self.angle = try container.decodeIfPresent(CGFloat.self, forKey: .angle) ?? 90
+        self.distance = try container.decodeIfPresent(CGFloat.self, forKey: .distance) ?? 10
+        self.blur = try container.decodeIfPresent(CGFloat.self, forKey: .blur) ?? 10
+        self.choke = try container.decodeIfPresent(CGFloat.self, forKey: .choke) ?? 0
+        self.red = try container.decodeIfPresent(CGFloat.self, forKey: .red) ?? 0
+        self.green = try container.decodeIfPresent(CGFloat.self, forKey: .green) ?? 0
+        self.blue = try container.decodeIfPresent(CGFloat.self, forKey: .blue) ?? 0
+        self.opacity = try container.decodeIfPresent(Double.self, forKey: .opacity) ?? 0.5
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(enabled, forKey: .enabled)
+        try container.encode(angle, forKey: .angle)
+        try container.encode(distance, forKey: .distance)
+        try container.encode(blur, forKey: .blur)
+        try container.encode(choke, forKey: .choke)
+        try container.encode(red, forKey: .red)
+        try container.encode(green, forKey: .green)
+        try container.encode(blue, forKey: .blue)
+        try container.encode(opacity, forKey: .opacity)
     }
 }
 
@@ -496,7 +584,7 @@ nonisolated enum LayerEffectsRenderer {
             }
         }
         if let shadow = effects.shadow {
-            margin = max(margin, shadow.distance + shadow.blur * 3)
+            margin = max(margin, shadow.distance + shadow.spread + shadow.blur * 3)
         }
         if let glow = effects.outerGlow {
             margin = max(margin, glow.size * 3)
@@ -526,8 +614,7 @@ nonisolated enum LayerEffectsRenderer {
         }
         let context = try BrushRaster.context(width: width, height: height, mask: false)
         if let shadow = effects.shadow, shadow.opacity > 0 {
-            let alpha = try coverage(shown, in: placed.offsetBy(dx: shadow.offset.width, dy: shadow.offset.height),
-                                     size: CGSize(width: width, height: height), blur: shadow.blur)
+            let alpha = try shadowCoverage(shown, placed: placed, size: CGSize(width: width, height: height), shadow: shadow)
             fill(shadow.color, alpha: shadow.opacity, coverage: alpha, in: full, context: context)
         }
         if let glow = effects.outerGlow, glow.opacity > 0 {
@@ -593,20 +680,57 @@ nonisolated enum LayerEffectsRenderer {
         return result
     }
 
-    /// A shadow's coverage for one piece of a layer: its shape, moved and softened.
-    static func shadowCoverage(_ pixels: CGImage, in size: CGSize, offset: CGSize, blur: CGFloat) throws -> CGImage {
-        let placed = CGRect(origin: .zero, size: CGSize(width: pixels.width, height: pixels.height))
-        return try coverage(pixels, in: placed.offsetBy(dx: offset.width, dy: offset.height), size: size, blur: blur)
+    /// A shadow's coverage: its shape, moved, optionally spread (dilated), and softened.
+    static func shadowCoverage(_ pixels: CGImage, placed: CGRect, size: CGSize, shadow: ShadowEffect) throws -> CGImage {
+        let width = Int(size.width), height = Int(size.height)
+        let shape = try coverage(pixels, in: placed.offsetBy(dx: shadow.offset.width, dy: shadow.offset.height), size: size, blur: 0)
+        let base: CGImage
+        if shadow.spread > 0 {
+            let reach = max(1, Int(shadow.spread.rounded()))
+            var levels = try GuidedMatte.levels(of: shape, width: width, height: height)
+            levels = extreme(levels, width: width, height: height, reach: reach, smallest: false)
+            base = try GuidedMatte.image(levels, width: width, height: height)
+        } else {
+            base = shape
+        }
+        guard shadow.blur > 0 else { return base }
+        let extent = CGRect(x: 0, y: 0, width: size.width, height: size.height)
+        let soft = CIImage(cgImage: base).clampedToExtent().applyingGaussianBlur(sigma: shadow.blur / 2).cropped(to: extent)
+        return try PixelAdjust.render(soft, width: width, height: height, isMask: true)
     }
 
-    /// An inner shadow's coverage: what lies outside the layer, moved and softened, kept to the layer's own shape.
+    /// Backward compatibility helper for single-piece surface rendering
+    static func shadowCoverage(_ pixels: CGImage, in size: CGSize, offset: CGSize, blur: CGFloat, spread: CGFloat = 0) throws -> CGImage {
+        let placed = CGRect(origin: .zero, size: CGSize(width: pixels.width, height: pixels.height))
+        let shadow = ShadowEffect(distance: 0, blur: blur, spread: spread)
+        return try shadowCoverage(pixels, placed: placed.offsetBy(dx: offset.width, dy: offset.height), size: size, shadow: shadow)
+    }
+
+    /// An inner shadow's coverage: what lies outside the layer, moved, optionally choked (eroded), and softened, kept to the layer's own shape.
     static func innerCoverage(_ image: CGImage, placed: CGRect, size: CGSize, shadow: InnerShadowEffect) throws -> CGImage {
         let width = Int(size.width), height = Int(size.height)
         let shape = try coverage(image, in: placed, size: size, blur: 0)
-        let moved = try coverage(image, in: placed.offsetBy(dx: shadow.offset.width, dy: shadow.offset.height),
-                                 size: size, blur: shadow.blur)
+        let movedShape = try coverage(image, in: placed.offsetBy(dx: shadow.offset.width, dy: shadow.offset.height),
+                                      size: size, blur: 0)
+        let movedToBlur: CGImage
+        if shadow.choke > 0 {
+            let reach = max(1, Int(shadow.choke.rounded()))
+            var levels = try GuidedMatte.levels(of: movedShape, width: width, height: height)
+            levels = extreme(levels, width: width, height: height, reach: reach, smallest: true)
+            movedToBlur = try GuidedMatte.image(levels, width: width, height: height)
+        } else {
+            movedToBlur = movedShape
+        }
+        let blurred: CGImage
+        if shadow.blur > 0 {
+            let extent = CGRect(x: 0, y: 0, width: size.width, height: size.height)
+            let soft = CIImage(cgImage: movedToBlur).clampedToExtent().applyingGaussianBlur(sigma: shadow.blur / 2).cropped(to: extent)
+            blurred = try PixelAdjust.render(soft, width: width, height: height, isMask: true)
+        } else {
+            blurred = movedToBlur
+        }
         var inside = try GuidedMatte.levels(of: shape, width: width, height: height)
-        let outside = try GuidedMatte.levels(of: moved, width: width, height: height)
+        let outside = try GuidedMatte.levels(of: blurred, width: width, height: height)
         for i in inside.indices { inside[i] = max(0, min(1, inside[i] * (1 - outside[i]))) }
         return try GuidedMatte.image(inside, width: width, height: height)
     }

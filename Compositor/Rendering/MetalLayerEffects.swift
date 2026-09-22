@@ -121,6 +121,13 @@ final class MetalLayerEffects {
             var moved = Shift(width: UInt32(width), height: UInt32(height),
                               dx: Float(shadow.offset.width), dy: Float(shadow.offset.height))
             run(shift, [(first, 0), (second, 1)], &moved, MemoryLayout<Shift>.stride)
+            if shadow.spread > 0 {
+                guard let scratch = device.makeBuffer(length: count * stride, options: .storageModeShared) else { throw ExportError.render }
+                var spread = Spread(width: UInt32(width), height: UInt32(height),
+                                    reach: UInt32(max(1, Int(shadow.spread.rounded()))), smallest: 0)
+                run(spreadRows, [(second, 0), (scratch, 1)], &spread, MemoryLayout<Spread>.stride)
+                run(spreadColumns, [(scratch, 0), (second, 1)], &spread, MemoryLayout<Spread>.stride)
+            }
             let sigma = Float(shadow.blur / 2)
             if sigma > 0.01 {
                 var blur = Blur(width: UInt32(width), height: UInt32(height), sigma: sigma,
@@ -142,6 +149,13 @@ final class MetalLayerEffects {
             var shift = Shift(width: UInt32(width), height: UInt32(height),
                               dx: Float(innerShadow.offset.width), dy: Float(innerShadow.offset.height))
             run(self.shift, [(first, 0), (moved, 1)], &shift, MemoryLayout<Shift>.stride)
+            if innerShadow.choke > 0 {
+                guard let scratch = device.makeBuffer(length: count * stride, options: .storageModeShared) else { throw ExportError.render }
+                var spread = Spread(width: UInt32(width), height: UInt32(height),
+                                    reach: UInt32(max(1, Int(innerShadow.choke.rounded()))), smallest: 1)
+                run(spreadRows, [(moved, 0), (scratch, 1)], &spread, MemoryLayout<Spread>.stride)
+                run(spreadColumns, [(scratch, 0), (moved, 1)], &spread, MemoryLayout<Spread>.stride)
+            }
             let sigma = Float(innerShadow.blur / 2)
             if sigma > 0.01 {
                 var blur = Blur(width: UInt32(width), height: UInt32(height), sigma: sigma,
