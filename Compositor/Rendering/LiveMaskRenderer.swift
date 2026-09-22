@@ -17,6 +17,9 @@ nonisolated final class LiveMaskRenderer {
     var adjustment: (UUID) -> LayerAdjustment? = { _ in nil }
     var adjustmentOpacity: (UUID) -> Double = { _ in 1 }
     var adjustmentClip: (UUID, CGContext) -> Void = { _, _ in }
+    var filter: (UUID) -> LayerFilter? = { _ in nil }
+    var filterOpacity: (UUID) -> Double = { _ in 1 }
+    var filterClip: (UUID, CGContext) -> Void = { _, _ in }
     private func adjust(_ id: UUID, in context: CGContext) {
         guard let settings = adjustment(id), let original = context.makeImage(),
               var adjusted = try? settings.apply(original, region: bounds) else { return }
@@ -57,12 +60,52 @@ nonisolated final class LiveMaskRenderer {
         BrushRaster.draw(image, in: bounds, mask: false, context: context)
         context.restoreGState()
     }
+    private func applyFilter(_ id: UUID, in context: CGContext) {
+        guard let settings = filter(id), let original = context.makeImage(),
+              var filtered = try? settings.apply(original, region: bounds) else { return }
+        if blendMode(id) != .normal {
+            // Blend colors at full coverage, then restore the original alpha.
+            // Source-over of two translucent copies would thicken soft edges.
+            let w = original.width, h = original.height
+            guard let base = try? BrushRaster.context(width: w, height: h, mask: false),
+                  let top = try? BrushRaster.context(width: w, height: h, mask: false),
+                  let alpha = try? BrushRaster.context(width: w, height: h, mask: true) else { return }
+            let rect = CGRect(x: 0, y: 0, width: w, height: h)
+            BrushRaster.draw(original, in: rect, mask: false, context: base)
+            BrushRaster.draw(filtered, in: rect, mask: false, context: top)
+            let pixels = base.data!.assumingMemoryBound(to: UInt8.self)
+            let coverage = alpha.data!.assumingMemoryBound(to: UInt8.self)
+            layer_extract_alpha(pixels, base.bytesPerRow, coverage, alpha.bytesPerRow, w, h)
+            layer_unpremultiply_opaque(pixels, base.bytesPerRow, w, h)
+            layer_unpremultiply_opaque(top.data!.assumingMemoryBound(to: UInt8.self), top.bytesPerRow, w, h)
+            guard let foreground = top.makeImage() else { return }
+            base.setBlendMode(blendMode(id).cgMode)
+            base.translateBy(x: 0, y: CGFloat(h)); base.scaleBy(x: 1, y: -1)
+            base.draw(foreground, in: rect)
+            layer_restore_alpha(pixels, base.bytesPerRow, coverage, alpha.bytesPerRow, w, h)
+            guard let result = base.makeImage() else { return }
+            filtered = result
+        }
+        let opacity = filterOpacity(id)
+        let image: CGImage
+        if opacity < 1 {
+            let blend = CIImage(cgImage: filtered).applyingFilter("CIBlendWithMask", parameters: [
+                kCIInputBackgroundImageKey: CIImage(cgImage: original),
+                kCIInputMaskImageKey: CIImage(color: CIColor(red: opacity, green: opacity, blue: opacity)).cropped(to: CIImage(cgImage: original).extent)])
+            guard let result = try? PixelAdjust.render(blend, width: original.width, height: original.height, isMask: false) else { return }
+            image = result
+        } else { image = filtered }
+        context.saveGState()
+        filterClip(id, context)
+        BrushRaster.draw(image, in: bounds, mask: false, context: context)
+        context.restoreGState()
+    }
     /// Clipping stacks share the base's alpha instead of painting that
     /// alpha over itself. Other dependency links retain independent-mask behavior.
     func prepareStacks(_ ids: [UUID], parent: (UUID) -> UUID?, blend: (UUID) -> LayerBlendMode) {
         let modes = Dictionary(uniqueKeysWithValues: ids.map { ($0, blend($0)) })
         blendMode = { modes[$0] ?? .normal }
-        for (index, base) in ids.enumerated() where source(base) == nil && adjustment(base) == nil {
+        for (index, base) in ids.enumerated() where source(base) == nil && adjustment(base) == nil && filter(base) == nil {
             var children: [UUID] = []
             for child in ids.dropFirst(index + 1) {
                 guard source(child) == base, parent(child) == parent(base) else { break }
@@ -78,6 +121,10 @@ nonisolated final class LiveMaskRenderer {
         guard !stacked.contains(id) else { return }
         if adjustment(id) != nil {
             if source(id) == nil { adjust(id, in: context) }
+            return
+        }
+        if filter(id) != nil {
+            if source(id) == nil { applyFilter(id, in: context) }
             return
         }
         guard let children = stacks[id], bounds.width > 0, bounds.height > 0,
@@ -96,6 +143,7 @@ nonisolated final class LiveMaskRenderer {
         layer_unpremultiply_opaque(pixels, group.bytesPerRow, w, h)
         for child in children {
             if adjustment(child) != nil { adjust(child, in: group) }
+            else if filter(child) != nil { applyFilter(child, in: group) }
             else { drawOwn(child, group) }
         }
         layer_restore_alpha(pixels, group.bytesPerRow, coverage, alpha.bytesPerRow, w, h)

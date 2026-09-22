@@ -157,7 +157,7 @@ extension EditorSession {
 
 extension EditorSession {
     func drawLiveComposite(_ document: CanvasDocument, in context: CGContext, onSurface: Bool = false) {
-        if !onSurface, document.layers.contains(where: { $0.adjustment != nil }) {
+        if !onSurface, document.layers.contains(where: { $0.adjustment != nil || $0.filter != nil }) {
             AdjustmentSurface.draw(in: context) { self.drawLiveComposite(document, in: $0, onSurface: true) }
             return
         }
@@ -190,6 +190,9 @@ extension EditorSession {
                 FolderMaskClip(image: image, transform: layer.transform).apply(center: layer.transform.center, in: ctx)
             }
         }
+        live.filter = { records[$0]?.filter }
+        live.filterOpacity = { records[$0]?.effectiveOpacity(in: records) ?? 1 }
+        live.filterClip = live.adjustmentClip
         live.prepareStacks(document.renderLayers.map(\.id), parent: { records[$0]?.parentID }, blend: { records[$0].map { self.displayedBlendMode(for: $0) } ?? .normal })
         FolderMaskClip.draw(document.renderLayers.map(\.id), parent: { records[$0]?.parentID }, clip: { id in
             guard let folder = records[id], let image = folder.mask?.enabledImage else { return nil }

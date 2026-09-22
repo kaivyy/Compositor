@@ -37,6 +37,7 @@ nonisolated struct ProjectLayerRecord: Codable, Sendable {
     var maskEnabled: Bool? = nil
     var maskSourceID: UUID? = nil
     var adjustment: LayerAdjustment? = nil
+    var filter: LayerFilter? = nil
     /// A mask moved apart from its layer: where it sits on the document.
     var maskPlacement: LayerTransform? = nil
     /// Nil (older projects) is linked.
