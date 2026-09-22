@@ -88,12 +88,32 @@ final class MetalLayerEffects {
 
         let stroke = effects.stroke.flatMap { $0.isEnabled && $0.size > 0 && $0.opacity > 0 ? $0 : nil }
         if let stroke {
-            // second: the shape reached out (or pulled in) by the stroke's size; third: the ring between them.
-            var spread = Spread(width: UInt32(width), height: UInt32(height),
-                                reach: UInt32(max(1, Int(stroke.size.rounded()))), smallest: stroke.inside ? 1 : 0)
-            run(spreadRows, [(first, 0), (third, 1)], &spread, MemoryLayout<Spread>.stride)
-            run(spreadColumns, [(third, 0), (second, 1)], &spread, MemoryLayout<Spread>.stride)
-            run(ring, [(first, 0), (second, 1), (third, 2)], &spread, MemoryLayout<Spread>.stride)
+            if stroke.position == .center {
+                guard let dilatedBuf = device.makeBuffer(length: count * stride, options: .storageModeShared),
+                      let scratch = device.makeBuffer(length: count * stride, options: .storageModeShared) else { throw ExportError.render }
+                let outReach = max(1, Int(ceil(stroke.size / 2.0)))
+                let inReach = max(0, Int(floor(stroke.size / 2.0)))
+                var outSpread = Spread(width: UInt32(width), height: UInt32(height), reach: UInt32(outReach), smallest: 0)
+                run(spreadRows, [(first, 0), (scratch, 1)], &outSpread, MemoryLayout<Spread>.stride)
+                run(spreadColumns, [(scratch, 0), (dilatedBuf, 1)], &outSpread, MemoryLayout<Spread>.stride)
+                if inReach > 0 {
+                    var inSpread = Spread(width: UInt32(width), height: UInt32(height), reach: UInt32(inReach), smallest: 1)
+                    run(spreadRows, [(first, 0), (scratch, 1)], &inSpread, MemoryLayout<Spread>.stride)
+                    run(spreadColumns, [(scratch, 0), (second, 1)], &inSpread, MemoryLayout<Spread>.stride)
+                    var ringSpread = Spread(width: UInt32(width), height: UInt32(height), reach: 0, smallest: 0)
+                    run(ring, [(second, 0), (dilatedBuf, 1), (third, 2)], &ringSpread, MemoryLayout<Spread>.stride)
+                } else {
+                    var ringSpread = Spread(width: UInt32(width), height: UInt32(height), reach: 0, smallest: 0)
+                    run(ring, [(first, 0), (dilatedBuf, 1), (third, 2)], &ringSpread, MemoryLayout<Spread>.stride)
+                }
+            } else {
+                // second: the shape reached out (or pulled in) by the stroke's size; third: the ring between them.
+                var spread = Spread(width: UInt32(width), height: UInt32(height),
+                                    reach: UInt32(max(1, Int(stroke.size.rounded()))), smallest: stroke.inside ? 1 : 0)
+                run(spreadRows, [(first, 0), (third, 1)], &spread, MemoryLayout<Spread>.stride)
+                run(spreadColumns, [(third, 0), (second, 1)], &spread, MemoryLayout<Spread>.stride)
+                run(ring, [(first, 0), (second, 1), (third, 2)], &spread, MemoryLayout<Spread>.stride)
+            }
         }
         let shadow = effects.shadow.flatMap { $0.isEnabled && $0.opacity > 0 ? $0 : nil }
         if let shadow {
@@ -186,7 +206,9 @@ final class MetalLayerEffects {
                              Float(glow?.color.blue ?? 0), Float(glow?.opacity ?? 0)),
             innerGlowColor: SIMD4(Float(innerGlow?.color.red ?? 0), Float(innerGlow?.color.green ?? 0),
                                   Float(innerGlow?.color.blue ?? 0), Float(innerGlow?.opacity ?? 0)),
-            flags: SIMD4(stroke != nil ? 1 : 0, stroke?.inside == true ? 1 : 0, shadow != nil ? 1 : 0,
+            flags: SIMD4(stroke != nil ? 1 : 0,
+                         stroke?.position == .inside ? 1 : (stroke?.position == .center ? 2 : 0),
+                         shadow != nil ? 1 : 0,
                          innerShadow != nil ? 1 : 0),
             more: SIMD4(overlay != nil ? 1 : 0, glow != nil ? 1 : 0, innerGlow != nil ? 1 : 0, 0))
         run(compose, [(input, 0), (third, 1), (second, 2), (output, 3), (inner, 4), (first, 5), (glowOutput, 6), (innerGlowOutput, 7)], &settings, MemoryLayout<Compose>.stride)
@@ -381,7 +403,7 @@ final class MetalLayerEffects {
             color = settings.innerColor.xyz * coverage + color * (1.0 - coverage);
             alpha = coverage + alpha * (1.0 - coverage);
         }
-        if (settings.flags.x == 1 && settings.flags.y == 1) {
+        if (settings.flags.x == 1 && (settings.flags.y == 1 || settings.flags.y == 2)) {
             color = settings.strokeColor.xyz * strokeCoverage + color * (1.0 - strokeCoverage);
             alpha = strokeCoverage + alpha * (1.0 - strokeCoverage);
         }

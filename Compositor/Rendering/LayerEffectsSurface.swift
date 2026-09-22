@@ -96,11 +96,11 @@ import CoreImage
             fill(glow.color, alpha: glow.opacity, coverage: coverage, in: placed(outer))
         }
         let stroke = effects.stroke.flatMap { $0.isEnabled && $0.size > 0 && $0.opacity > 0 ? $0 : nil }
-        if let stroke, !stroke.inside, let ring = try? LayerEffectsRenderer.ringCoverage(pixels, in: outer.size, stroke: stroke) {
+        if let stroke, stroke.position == .outside, let ring = try? LayerEffectsRenderer.ringCoverage(pixels, in: outer.size, stroke: stroke) {
             fill(stroke.color, alpha: stroke.opacity, coverage: ring, in: placed(outer))
         }
         BrushRaster.draw(pixels, in: placed(outer), mask: false, context: context)
-        if let stroke, stroke.inside, let ring = try? LayerEffectsRenderer.ringCoverage(pixels, in: outer.size, stroke: stroke) {
+        if let stroke, stroke.position != .outside, let ring = try? LayerEffectsRenderer.ringCoverage(pixels, in: outer.size, stroke: stroke) {
             fill(stroke.color, alpha: stroke.opacity, coverage: ring, in: placed(outer))
         }
         context.restoreGState()
