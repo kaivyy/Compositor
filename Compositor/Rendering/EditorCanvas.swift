@@ -843,8 +843,18 @@ final class CanvasView: NSView {
                     }) {
                 // A seeded preview carries the place it belongs; everything else is the layer's box plus its margin.
                 let grown = effects.placement ?? LayerEffectsRenderer.placed(transform, image: effects.image, inset: effects.inset)
-                LayerRenderer.draw(effects.image, transform: grown, center: center(grown.center), scale: scale,
-                    opacity: opacity, blendMode: blendMode(of: layer), mask: nil, in: context)
+                let mode = blendMode(of: layer)
+                if !effects.passes.isEmpty {
+                    for pass in effects.passes {
+                        let passMode = pass.blendMode ?? mode
+                        let passOpacity = opacity * pass.opacity
+                        LayerRenderer.draw(pass.image, transform: grown, center: center(grown.center), scale: scale,
+                            opacity: passOpacity, blendMode: passMode, mask: nil, in: context)
+                    }
+                } else {
+                    LayerRenderer.draw(effects.image, transform: grown, center: center(grown.center), scale: scale,
+                        opacity: opacity, blendMode: mode, mask: nil, in: context)
+                }
                 return
             }
             if stroke == nil, let shaped = session.shapeTransformPreview(for: layer, transform: transform) {
@@ -865,8 +875,18 @@ final class CanvasView: NSView {
                 if let effects = session.effectsPreviews.rendered(layer.id) {
                     let grown = effects.placement
                         ?? LayerEffectsRenderer.placed(layer.transform, image: effects.image, inset: effects.inset)
-                    LayerRenderer.draw(effects.image, transform: grown, center: center(grown.center), scale: scale,
-                        opacity: opacity, blendMode: blendMode(of: layer), mask: nil, in: context)
+                    let mode = blendMode(of: layer)
+                    if !effects.passes.isEmpty {
+                        for pass in effects.passes {
+                            let passMode = pass.blendMode ?? mode
+                            let passOpacity = opacity * pass.opacity
+                            LayerRenderer.draw(pass.image, transform: grown, center: center(grown.center), scale: scale,
+                                opacity: passOpacity, blendMode: passMode, mask: nil, in: context)
+                        }
+                    } else {
+                        LayerRenderer.draw(effects.image, transform: grown, center: center(grown.center), scale: scale,
+                            opacity: opacity, blendMode: mode, mask: nil, in: context)
+                    }
                 }
                 // Painting pixels previews exactly as the finished layer will look, with the layer's own
                 // sampling, so nothing shifts when a stroke starts or ends (see TiledLayerRenderer).

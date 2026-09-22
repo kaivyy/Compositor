@@ -171,8 +171,24 @@ extension EditorSession {
             func drawLayer(_ mode: LayerBlendMode, _ target: CGContext) {
                 if let effects {
                     let grown = LayerEffectsRenderer.placed(transform, image: effects.image, inset: effects.inset)
-                    LayerRenderer.draw(effects.image, transform: grown, center: grown.center, opacity: opacity,
-                        blendMode: mode, mask: nil, in: target)
+                    if !effects.passes.isEmpty {
+                        for pass in effects.passes {
+                            let passMode = pass.blendMode ?? mode
+                            let passOpacity = opacity * pass.opacity
+                            if SeparableBlend.isCoreGraphicsWrong(passMode) {
+                                _ = SeparableBlend.draw(passMode, in: target) { subTarget in
+                                    LayerRenderer.draw(pass.image, transform: grown, center: grown.center,
+                                        opacity: passOpacity, blendMode: .normal, mask: nil, in: subTarget)
+                                }
+                            } else {
+                                LayerRenderer.draw(pass.image, transform: grown, center: grown.center,
+                                    opacity: passOpacity, blendMode: passMode, mask: nil, in: target)
+                            }
+                        }
+                    } else {
+                        LayerRenderer.draw(effects.image, transform: grown, center: grown.center, opacity: opacity,
+                            blendMode: mode, mask: nil, in: target)
+                    }
                     return
                 }
                 LayerRenderer.draw(image, transform: transform, center: transform.center, opacity: opacity,
@@ -180,7 +196,7 @@ extension EditorSession {
             }
             let mode = self.displayedBlendMode(for: layer)
             // Core Graphics blends these two wrong; see SeparableBlend.
-            if SeparableBlend.isCoreGraphicsWrong(mode), SeparableBlend.draw(mode, in: ctx, body: { drawLayer(.normal, $0) }) { return }
+            if effects == nil && SeparableBlend.isCoreGraphicsWrong(mode), SeparableBlend.draw(mode, in: ctx, body: { drawLayer(.normal, $0) }) { return }
             drawLayer(mode, ctx)
         }
         live.adjustment = { records[$0]?.adjustment }

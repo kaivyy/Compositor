@@ -89,19 +89,19 @@ import CoreImage
         context.clear(placed(inner))
         if let shadow = effects.shadow, shadow.isEnabled, shadow.opacity > 0,
            let coverage = try? LayerEffectsRenderer.shadowCoverage(pixels, in: outer.size, offset: shadow.offset, blur: shadow.blur, spread: shadow.spread) {
-            fill(shadow.color, alpha: shadow.opacity, coverage: coverage, in: placed(outer))
+            fill(shadow.color, alpha: shadow.opacity, coverage: coverage, in: placed(outer), blendMode: shadow.blendMode)
         }
         if let glow = effects.outerGlow, glow.isEnabled, glow.opacity > 0,
            let coverage = try? LayerEffectsRenderer.outerGlowCoverage(pixels, placed: CGRect(origin: .zero, size: outer.size), size: outer.size, glow: glow) {
-            fill(glow.color, alpha: glow.opacity, coverage: coverage, in: placed(outer))
+            fill(glow.color, alpha: glow.opacity, coverage: coverage, in: placed(outer), blendMode: glow.blendMode)
         }
         let stroke = effects.stroke.flatMap { $0.isEnabled && $0.size > 0 && $0.opacity > 0 ? $0 : nil }
         if let stroke, stroke.position == .outside, let ring = try? LayerEffectsRenderer.ringCoverage(pixels, in: outer.size, stroke: stroke) {
-            fill(stroke.color, alpha: stroke.opacity, coverage: ring, in: placed(outer))
+            fill(stroke.color, alpha: stroke.opacity, coverage: ring, in: placed(outer), blendMode: stroke.blendMode)
         }
         BrushRaster.draw(pixels, in: placed(outer), mask: false, context: context)
         if let stroke, stroke.position != .outside, let ring = try? LayerEffectsRenderer.ringCoverage(pixels, in: outer.size, stroke: stroke) {
-            fill(stroke.color, alpha: stroke.opacity, coverage: ring, in: placed(outer))
+            fill(stroke.color, alpha: stroke.opacity, coverage: ring, in: placed(outer), blendMode: stroke.blendMode)
         }
         context.restoreGState()
     }
@@ -137,8 +137,9 @@ import CoreImage
         return window.makeImage()
     }
 
-    private func fill(_ color: PaletteColor, alpha: Double, coverage: CGImage, in rect: CGRect) {
+    private func fill(_ color: PaletteColor, alpha: Double, coverage: CGImage, in rect: CGRect, blendMode: LayerBlendMode = .normal) {
         context.saveGState()
+        context.setBlendMode(blendMode.cgMode)
         context.clip(to: rect, mask: coverage)
         context.setAlpha(alpha)
         context.setFillColor(CGColor(srgbRed: color.red, green: color.green, blue: color.blue, alpha: 1))

@@ -25,6 +25,7 @@ nonisolated struct StrokeEffect: Codable, Equatable, Sendable {
         get { position == .inside }
         set { position = newValue ? .inside : .outside }
     }
+    var blendMode: LayerBlendMode = .normal
     var color: PaletteColor { PaletteColor(red: red, green: green, blue: blue) }
     var isValid: Bool {
         size.isFinite && (0...StrokeEffect.maxSize).contains(size) && opacity.isFinite && (0...1).contains(opacity)
@@ -32,10 +33,10 @@ nonisolated struct StrokeEffect: Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case enabled, size, red, green, blue, opacity, inside, position
+        case enabled, size, red, green, blue, opacity, inside, position, blendMode
     }
 
-    init(enabled: Bool? = nil, size: CGFloat = 4, red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, opacity: Double = 1, inside: Bool = false) {
+    init(enabled: Bool? = nil, size: CGFloat = 4, red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, opacity: Double = 1, inside: Bool = false, blendMode: LayerBlendMode = .normal) {
         self.enabled = enabled
         self.size = size
         self.red = red
@@ -43,9 +44,10 @@ nonisolated struct StrokeEffect: Codable, Equatable, Sendable {
         self.blue = blue
         self.opacity = opacity
         self.position = inside ? .inside : .outside
+        self.blendMode = blendMode
     }
 
-    init(enabled: Bool? = nil, size: CGFloat = 4, red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, opacity: Double = 1, position: StrokePosition) {
+    init(enabled: Bool? = nil, size: CGFloat = 4, red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, opacity: Double = 1, position: StrokePosition, blendMode: LayerBlendMode = .normal) {
         self.enabled = enabled
         self.size = size
         self.red = red
@@ -53,6 +55,7 @@ nonisolated struct StrokeEffect: Codable, Equatable, Sendable {
         self.blue = blue
         self.opacity = opacity
         self.position = position
+        self.blendMode = blendMode
     }
 
     init(from decoder: Decoder) throws {
@@ -70,6 +73,7 @@ nonisolated struct StrokeEffect: Codable, Equatable, Sendable {
         } else {
             self.position = .outside
         }
+        self.blendMode = try container.decodeIfPresent(LayerBlendMode.self, forKey: .blendMode) ?? .normal
     }
 
     func encode(to encoder: Encoder) throws {
@@ -82,6 +86,7 @@ nonisolated struct StrokeEffect: Codable, Equatable, Sendable {
         try container.encode(opacity, forKey: .opacity)
         try container.encode(position, forKey: .position)
         try container.encode(position == .inside, forKey: .inside)
+        try container.encode(blendMode, forKey: .blendMode)
     }
 }
 
@@ -99,6 +104,7 @@ nonisolated struct ShadowEffect: Codable, Equatable, Sendable {
     var green: CGFloat = 0
     var blue: CGFloat = 0
     var opacity: Double = 0.5
+    var blendMode: LayerBlendMode = .multiply
     var color: PaletteColor { PaletteColor(red: red, green: green, blue: blue) }
     /// Where the shadow sits, in layer pixels (y grows downward, as the layer's own pixels do).
     var offset: CGSize {
@@ -114,11 +120,11 @@ nonisolated struct ShadowEffect: Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case enabled, angle, distance, blur, spread, red, green, blue, opacity
+        case enabled, angle, distance, blur, spread, red, green, blue, opacity, blendMode
     }
 
     init(enabled: Bool? = nil, angle: CGFloat = 90, distance: CGFloat = 20, blur: CGFloat = 20, spread: CGFloat = 0,
-         red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, opacity: Double = 0.5) {
+         red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, opacity: Double = 0.5, blendMode: LayerBlendMode = .multiply) {
         self.enabled = enabled
         self.angle = angle
         self.distance = distance
@@ -128,6 +134,7 @@ nonisolated struct ShadowEffect: Codable, Equatable, Sendable {
         self.green = green
         self.blue = blue
         self.opacity = opacity
+        self.blendMode = blendMode
     }
 
     init(from decoder: Decoder) throws {
@@ -141,6 +148,7 @@ nonisolated struct ShadowEffect: Codable, Equatable, Sendable {
         self.green = try container.decodeIfPresent(CGFloat.self, forKey: .green) ?? 0
         self.blue = try container.decodeIfPresent(CGFloat.self, forKey: .blue) ?? 0
         self.opacity = try container.decodeIfPresent(Double.self, forKey: .opacity) ?? 0.5
+        self.blendMode = try container.decodeIfPresent(LayerBlendMode.self, forKey: .blendMode) ?? .multiply
     }
 
     func encode(to encoder: Encoder) throws {
@@ -154,6 +162,7 @@ nonisolated struct ShadowEffect: Codable, Equatable, Sendable {
         try container.encode(green, forKey: .green)
         try container.encode(blue, forKey: .blue)
         try container.encode(opacity, forKey: .opacity)
+        try container.encode(blendMode, forKey: .blendMode)
     }
 }
 
@@ -165,9 +174,43 @@ nonisolated struct ColorOverlayEffect: Codable, Equatable, Sendable {
     var green: CGFloat = 0
     var blue: CGFloat = 0
     var opacity: Double = 1
+    var blendMode: LayerBlendMode = .normal
     var color: PaletteColor { PaletteColor(red: red, green: green, blue: blue) }
     var isValid: Bool {
         opacity.isFinite && (0...1).contains(opacity) && [red, green, blue].allSatisfy { $0.isFinite && (0...1).contains($0) }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, red, green, blue, opacity, blendMode
+    }
+
+    init(enabled: Bool? = nil, red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, opacity: Double = 1, blendMode: LayerBlendMode = .normal) {
+        self.enabled = enabled
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.opacity = opacity
+        self.blendMode = blendMode
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
+        self.red = try container.decodeIfPresent(CGFloat.self, forKey: .red) ?? 0
+        self.green = try container.decodeIfPresent(CGFloat.self, forKey: .green) ?? 0
+        self.blue = try container.decodeIfPresent(CGFloat.self, forKey: .blue) ?? 0
+        self.opacity = try container.decodeIfPresent(Double.self, forKey: .opacity) ?? 1
+        self.blendMode = try container.decodeIfPresent(LayerBlendMode.self, forKey: .blendMode) ?? .normal
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(enabled, forKey: .enabled)
+        try container.encode(red, forKey: .red)
+        try container.encode(green, forKey: .green)
+        try container.encode(blue, forKey: .blue)
+        try container.encode(opacity, forKey: .opacity)
+        try container.encode(blendMode, forKey: .blendMode)
     }
 }
 
@@ -183,6 +226,7 @@ nonisolated struct InnerShadowEffect: Codable, Equatable, Sendable {
     var green: CGFloat = 0
     var blue: CGFloat = 0
     var opacity: Double = 0.5
+    var blendMode: LayerBlendMode = .multiply
     var color: PaletteColor { PaletteColor(red: red, green: green, blue: blue) }
     /// Where the shadow falls, in layer pixels (y grows downward).
     var offset: CGSize {
@@ -197,11 +241,11 @@ nonisolated struct InnerShadowEffect: Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case enabled, angle, distance, blur, choke, red, green, blue, opacity
+        case enabled, angle, distance, blur, choke, red, green, blue, opacity, blendMode
     }
 
     init(enabled: Bool? = nil, angle: CGFloat = 90, distance: CGFloat = 10, blur: CGFloat = 10, choke: CGFloat = 0,
-         red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, opacity: Double = 0.5) {
+         red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, opacity: Double = 0.5, blendMode: LayerBlendMode = .multiply) {
         self.enabled = enabled
         self.angle = angle
         self.distance = distance
@@ -211,6 +255,7 @@ nonisolated struct InnerShadowEffect: Codable, Equatable, Sendable {
         self.green = green
         self.blue = blue
         self.opacity = opacity
+        self.blendMode = blendMode
     }
 
     init(from decoder: Decoder) throws {
@@ -224,6 +269,7 @@ nonisolated struct InnerShadowEffect: Codable, Equatable, Sendable {
         self.green = try container.decodeIfPresent(CGFloat.self, forKey: .green) ?? 0
         self.blue = try container.decodeIfPresent(CGFloat.self, forKey: .blue) ?? 0
         self.opacity = try container.decodeIfPresent(Double.self, forKey: .opacity) ?? 0.5
+        self.blendMode = try container.decodeIfPresent(LayerBlendMode.self, forKey: .blendMode) ?? .multiply
     }
 
     func encode(to encoder: Encoder) throws {
@@ -237,6 +283,7 @@ nonisolated struct InnerShadowEffect: Codable, Equatable, Sendable {
         try container.encode(green, forKey: .green)
         try container.encode(blue, forKey: .blue)
         try container.encode(opacity, forKey: .opacity)
+        try container.encode(blendMode, forKey: .blendMode)
     }
 }
 
@@ -249,11 +296,48 @@ nonisolated struct OuterGlowEffect: Codable, Equatable, Sendable {
     var green: CGFloat = 1
     var blue: CGFloat = 1
     var opacity: Double = 0.75
+    var blendMode: LayerBlendMode = .screen
     var color: PaletteColor { PaletteColor(red: red, green: green, blue: blue) }
     var isValid: Bool {
         size.isFinite && (0...500).contains(size)
             && opacity.isFinite && (0...1).contains(opacity)
             && [red, green, blue].allSatisfy { $0.isFinite && (0...1).contains($0) }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, size, red, green, blue, opacity, blendMode
+    }
+
+    init(enabled: Bool? = nil, size: CGFloat = 20, red: CGFloat = 0, green: CGFloat = 0.94, blue: CGFloat = 1, opacity: Double = 0.75, blendMode: LayerBlendMode = .screen) {
+        self.enabled = enabled
+        self.size = size
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.opacity = opacity
+        self.blendMode = blendMode
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
+        self.size = try container.decodeIfPresent(CGFloat.self, forKey: .size) ?? 20
+        self.red = try container.decodeIfPresent(CGFloat.self, forKey: .red) ?? 0
+        self.green = try container.decodeIfPresent(CGFloat.self, forKey: .green) ?? 0.94
+        self.blue = try container.decodeIfPresent(CGFloat.self, forKey: .blue) ?? 1
+        self.opacity = try container.decodeIfPresent(Double.self, forKey: .opacity) ?? 0.75
+        self.blendMode = try container.decodeIfPresent(LayerBlendMode.self, forKey: .blendMode) ?? .screen
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(enabled, forKey: .enabled)
+        try container.encode(size, forKey: .size)
+        try container.encode(red, forKey: .red)
+        try container.encode(green, forKey: .green)
+        try container.encode(blue, forKey: .blue)
+        try container.encode(opacity, forKey: .opacity)
+        try container.encode(blendMode, forKey: .blendMode)
     }
 }
 
@@ -266,11 +350,48 @@ nonisolated struct InnerGlowEffect: Codable, Equatable, Sendable {
     var green: CGFloat = 1
     var blue: CGFloat = 1
     var opacity: Double = 0.75
+    var blendMode: LayerBlendMode = .screen
     var color: PaletteColor { PaletteColor(red: red, green: green, blue: blue) }
     var isValid: Bool {
         size.isFinite && (0...500).contains(size)
             && opacity.isFinite && (0...1).contains(opacity)
             && [red, green, blue].allSatisfy { $0.isFinite && (0...1).contains($0) }
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, size, red, green, blue, opacity, blendMode
+    }
+
+    init(enabled: Bool? = nil, size: CGFloat = 10, red: CGFloat = 1, green: CGFloat = 1, blue: CGFloat = 1, opacity: Double = 0.75, blendMode: LayerBlendMode = .screen) {
+        self.enabled = enabled
+        self.size = size
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.opacity = opacity
+        self.blendMode = blendMode
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled)
+        self.size = try container.decodeIfPresent(CGFloat.self, forKey: .size) ?? 10
+        self.red = try container.decodeIfPresent(CGFloat.self, forKey: .red) ?? 1
+        self.green = try container.decodeIfPresent(CGFloat.self, forKey: .green) ?? 1
+        self.blue = try container.decodeIfPresent(CGFloat.self, forKey: .blue) ?? 1
+        self.opacity = try container.decodeIfPresent(Double.self, forKey: .opacity) ?? 0.75
+        self.blendMode = try container.decodeIfPresent(LayerBlendMode.self, forKey: .blendMode) ?? .screen
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(enabled, forKey: .enabled)
+        try container.encode(size, forKey: .size)
+        try container.encode(red, forKey: .red)
+        try container.encode(green, forKey: .green)
+        try container.encode(blue, forKey: .blue)
+        try container.encode(opacity, forKey: .opacity)
+        try container.encode(blendMode, forKey: .blendMode)
     }
 }
 
@@ -520,6 +641,21 @@ extension EditorSession {
     }
 }
 
+/// An individual pass of layer effects to be composited against canvas backdrops or into a full composite.
+nonisolated struct EffectPass: Sendable, Equatable {
+    let image: CGImage
+    /// If nil, the pass inherits the layer's own blend mode (e.g. for layer content).
+    /// If non-nil, the pass uses this explicit effect blend mode against the backdrop.
+    let blendMode: LayerBlendMode?
+    let opacity: Double
+}
+
+nonisolated struct RenderedEffects: Sendable {
+    let image: CGImage
+    let inset: CGFloat
+    let passes: [EffectPass]
+}
+
 /// Draws a layer's effects around its pixels. The result is the layer as it should appear — shadow behind, stroke
 /// around, pixels on top — on a canvas grown by `inset` pixels on every side, so the caller places it by growing
 /// the layer's transform in the same proportion.
@@ -527,20 +663,20 @@ nonisolated enum LayerEffectsRenderer {
     /// The last few layers drawn with effects, so the canvas doesn't rebuild them on every redraw.
     private final class Cache: @unchecked Sendable {
         private let lock = NSLock()
-        private var entries: [(image: CGImage, mask: CGImage?, effects: LayerEffects, result: CGImage, inset: CGFloat)] = []
+        private var entries: [(image: CGImage, mask: CGImage?, effects: LayerEffects, result: RenderedEffects)] = []
         func result(image: CGImage, mask: CGImage?, effects: LayerEffects,
-                    make: () throws -> (image: CGImage, inset: CGFloat)) throws -> (image: CGImage, inset: CGFloat) {
+                    make: () throws -> RenderedEffects) throws -> RenderedEffects {
             lock.lock()
             let hit = entries.first { $0.image === image && $0.mask === mask && $0.effects == effects }
             lock.unlock()
-            if let hit { return (hit.result, hit.inset) }
+            if let hit { return hit.result }
             let made = try make()
             lock.lock()
             let budget = 64 * 1024 * 1024
             let cost = made.image.bytesPerRow * made.image.height + image.bytesPerRow * image.height + (mask.map { $0.bytesPerRow * $0.height } ?? 0)
             if cost <= budget {
-                entries.append((image, mask, effects, made.image, made.inset))
-                while entries.count > 8 || entries.reduce(0, { $0 + $1.result.bytesPerRow * $1.result.height + $1.image.bytesPerRow * $1.image.height + ($1.mask.map { $0.bytesPerRow * $0.height } ?? 0) }) > budget {
+                entries.append((image, mask, effects, made))
+                while entries.count > 8 || entries.reduce(0, { $0 + $1.result.image.bytesPerRow * $1.result.image.height + $1.image.bytesPerRow * $1.image.height + ($1.mask.map { $0.bytesPerRow * $0.height } ?? 0) }) > budget {
                     entries.removeFirst()
                 }
             }
@@ -552,10 +688,10 @@ nonisolated enum LayerEffectsRenderer {
 
     /// `image` with `effects` around it, reusing the last result for the same pixels, mask and settings. Nil when
     /// there is nothing to draw or the effects can't be made, so the caller draws the layer as it is.
-    static func cached(_ image: CGImage, mask: CGImage?, effects: LayerEffects?) -> (image: CGImage, inset: CGFloat)? {
+    static func cached(_ image: CGImage, mask: CGImage?, effects: LayerEffects?) -> RenderedEffects? {
         guard let effects = effects?.visible, !effects.isEmpty, effects.isValid else { return nil }
         return try? cache.result(image: image, mask: mask, effects: effects) {
-            try render(image, mask: mask, effects: effects)
+            try renderPasses(image, mask: mask, effects: effects)
         }
     }
 
@@ -592,9 +728,14 @@ nonisolated enum LayerEffectsRenderer {
         return ceil(margin) + 2
     }
 
-    /// `image` with `effects` around it. `mask` (the layer's own mask, in its pixel grid) hides part of the layer
-    /// before the effects are made, so they follow the shape that is actually shown, as in Photoshop.
+    /// `image` with `effects` around it.
     static func render(_ image: CGImage, mask: CGImage?, effects: LayerEffects) throws -> (image: CGImage, inset: CGFloat) {
+        let rendered = try renderPasses(image, mask: mask, effects: effects)
+        return (rendered.image, rendered.inset)
+    }
+
+    /// Renders `image` with `effects` broken into separate passes for accurate compositing against backdrops.
+    static func renderPasses(_ image: CGImage, mask: CGImage?, effects: LayerEffects) throws -> RenderedEffects {
         let effects = effects.visible
         guard effects.isValid else { throw ProjectError.invalid }
         let inset = margin(for: effects)
@@ -602,57 +743,83 @@ nonisolated enum LayerEffectsRenderer {
         guard width > 0, height > 0, width * height <= 100_000_000 else { throw ProjectError.tooLarge }
         let placed = CGRect(x: inset, y: inset, width: CGFloat(image.width), height: CGFloat(image.height))
         let full = CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
-        // The layer as it is shown: its pixels through its mask.
         let shown = try masked(image, mask: mask)
-        if let metal = MetalLayerEffects.shared {
-            // The pixels with room around them, then the stroke and shadow drawn on the GPU.
-            let padded = try BrushRaster.context(width: width, height: height, mask: false)
-            BrushRaster.draw(shown, in: placed, mask: false, context: padded)
-            if let room = padded.makeImage(), let built = try? metal.render(room, effects: effects) {
-                return (built, inset)
+
+        var passes: [EffectPass] = []
+
+        // 1. Drop Shadow pass
+        if let shadow = effects.shadow, shadow.isEnabled, shadow.opacity > 0 {
+            let shadowCtx = try BrushRaster.context(width: width, height: height, mask: false)
+            let alpha = try shadowCoverage(shown, placed: placed, size: CGSize(width: width, height: height), shadow: shadow)
+            fill(shadow.color, alpha: shadow.opacity, coverage: alpha, in: full, context: shadowCtx)
+            if let shadowImg = shadowCtx.makeImage() {
+                passes.append(EffectPass(image: shadowImg, blendMode: shadow.blendMode, opacity: 1.0))
             }
         }
-        let context = try BrushRaster.context(width: width, height: height, mask: false)
-        if let shadow = effects.shadow, shadow.opacity > 0 {
-            let alpha = try shadowCoverage(shown, placed: placed, size: CGSize(width: width, height: height), shadow: shadow)
-            fill(shadow.color, alpha: shadow.opacity, coverage: alpha, in: full, context: context)
-        }
-        if let glow = effects.outerGlow, glow.opacity > 0 {
+
+        // 2. Outer Glow pass
+        if let glow = effects.outerGlow, glow.isEnabled, glow.opacity > 0 {
+            let glowCtx = try BrushRaster.context(width: width, height: height, mask: false)
             let alpha = try outerGlowCoverage(shown, placed: placed, size: CGSize(width: width, height: height), glow: glow)
-            fill(glow.color, alpha: glow.opacity, coverage: alpha, in: full, context: context)
+            fill(glow.color, alpha: glow.opacity, coverage: alpha, in: full, context: glowCtx)
+            if let glowImg = glowCtx.makeImage() {
+                passes.append(EffectPass(image: glowImg, blendMode: glow.blendMode, opacity: 1.0))
+            }
         }
-        // An outside stroke sits behind the layer's own pixels; an inside one is drawn over them, or the pixels
-        // would simply cover it.
-        let stroke = effects.stroke.flatMap { $0.size > 0 && $0.opacity > 0 ? $0 : nil }
-        func drawStroke(_ stroke: StrokeEffect) throws {
+
+        // 3. Outside Stroke pass
+        let stroke = effects.stroke.flatMap { $0.isEnabled && $0.size > 0 && $0.opacity > 0 ? $0 : nil }
+        if let stroke, stroke.position == .outside {
+            let strokeCtx = try BrushRaster.context(width: width, height: height, mask: false)
             let alpha = try strokeCoverage(shown, placed: placed, size: CGSize(width: width, height: height), stroke: stroke)
-            fill(stroke.color, alpha: stroke.opacity, coverage: alpha, in: full, context: context)
+            fill(stroke.color, alpha: stroke.opacity, coverage: alpha, in: full, context: strokeCtx)
+            if let strokeImg = strokeCtx.makeImage() {
+                passes.append(EffectPass(image: strokeImg, blendMode: stroke.blendMode, opacity: 1.0))
+            }
         }
-        if let stroke, stroke.position == .outside { try drawStroke(stroke) }
-        // Source-over preserves effects beneath transparent pixels. BrushRaster.draw uses .copy,
-        // which would erase the stroke/shadow everywhere inside the source's rectangular bounds.
-        context.saveGState()
-        context.translateBy(x: placed.minX, y: placed.maxY)
-        context.scaleBy(x: 1, y: -1)
-        context.setBlendMode(.normal)
-        context.draw(shown, in: CGRect(origin: .zero, size: placed.size))
-        context.restoreGState()
-        // Over the pixels: a flat color, then a shadow inside the layer's own edges.
+
+        // 4. Layer Content pass (source pixels + interior effects)
+        let contentCtx = try BrushRaster.context(width: width, height: height, mask: false)
+        contentCtx.saveGState()
+        contentCtx.translateBy(x: placed.minX, y: placed.maxY)
+        contentCtx.scaleBy(x: 1, y: -1)
+        contentCtx.setBlendMode(.normal)
+        contentCtx.draw(shown, in: CGRect(origin: .zero, size: placed.size))
+        contentCtx.restoreGState()
+
         if let overlay = effects.colorOverlay, overlay.isEnabled, overlay.opacity > 0,
            let shape = try? coverage(shown, in: placed, size: CGSize(width: width, height: height), blur: 0) {
-            fill(overlay.color, alpha: overlay.opacity, coverage: shape, in: full, context: context)
+            fill(overlay.color, alpha: overlay.opacity, coverage: shape, in: full, context: contentCtx, blendMode: overlay.blendMode)
         }
         if let innerGlow = effects.innerGlow, innerGlow.isEnabled, innerGlow.opacity > 0,
            let insideGlow = try? innerGlowCoverage(shown, placed: placed, size: CGSize(width: width, height: height), glow: innerGlow) {
-            fill(innerGlow.color, alpha: innerGlow.opacity, coverage: insideGlow, in: full, context: context)
+            fill(innerGlow.color, alpha: innerGlow.opacity, coverage: insideGlow, in: full, context: contentCtx, blendMode: innerGlow.blendMode)
         }
         if let inner = effects.innerShadow, inner.isEnabled, inner.opacity > 0,
            let inside = try? innerCoverage(shown, placed: placed, size: CGSize(width: width, height: height), shadow: inner) {
-            fill(inner.color, alpha: inner.opacity, coverage: inside, in: full, context: context)
+            fill(inner.color, alpha: inner.opacity, coverage: inside, in: full, context: contentCtx, blendMode: inner.blendMode)
         }
-        if let stroke, stroke.position != .outside { try drawStroke(stroke) }
-        guard let result = context.makeImage() else { throw ExportError.render }
-        return (result, inset)
+        if let stroke, stroke.position != .outside {
+            let alpha = try strokeCoverage(shown, placed: placed, size: CGSize(width: width, height: height), stroke: stroke)
+            fill(stroke.color, alpha: stroke.opacity, coverage: alpha, in: full, context: contentCtx, blendMode: stroke.blendMode)
+        }
+        if let contentImg = contentCtx.makeImage() {
+            passes.append(EffectPass(image: contentImg, blendMode: nil, opacity: 1.0))
+        }
+
+        // Composite image: assembled in back-to-front order
+        let compositeCtx = try BrushRaster.context(width: width, height: height, mask: false)
+        for pass in passes {
+            compositeCtx.saveGState()
+            compositeCtx.translateBy(x: 0, y: CGFloat(height))
+            compositeCtx.scaleBy(x: 1, y: -1)
+            compositeCtx.setBlendMode((pass.blendMode ?? .normal).cgMode)
+            compositeCtx.setAlpha(pass.opacity)
+            compositeCtx.draw(pass.image, in: full)
+            compositeCtx.restoreGState()
+        }
+        guard let compositeImage = compositeCtx.makeImage() else { throw ExportError.render }
+        return RenderedEffects(image: compositeImage, inset: inset, passes: passes)
     }
 
     /// An inner glow's coverage: the source shape softened inward, kept to the layer's own shape.
@@ -836,10 +1003,13 @@ nonisolated enum LayerEffectsRenderer {
         return result
     }
 
-    private static func fill(_ color: PaletteColor, alpha: Double, coverage: CGImage, in rect: CGRect, context: CGContext) {
+    private static func fill(_ color: PaletteColor, alpha: Double, coverage: CGImage, in rect: CGRect, context: CGContext, blendMode: LayerBlendMode = .normal) {
         // Coverage is a CGImage: use the same local image flip as the source, so asymmetric marks
         // and their effects line up instead of mirroring the coverage vertically.
+        context.saveGState()
+        context.setBlendMode(blendMode.cgMode)
         BrushRaster.fill(CGColor(srgbRed: color.red, green: color.green, blue: color.blue, alpha: 1),
                          coverage: coverage, in: rect, alpha: CGFloat(alpha), context: context)
+        context.restoreGState()
     }
 }

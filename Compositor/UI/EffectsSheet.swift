@@ -44,6 +44,9 @@ struct EffectsSheet: View {
             }
         }
         if let effect {
+            blendModePicker(selection: Binding(get: { effect.blendMode }, set: { mode in
+                session.changeEffects { $0.stroke?.blendMode = mode }
+            }))
             HStack {
                 Text("Color").frame(width: 64, alignment: .leading)
                 swatch(.stroke)
@@ -66,6 +69,9 @@ struct EffectsSheet: View {
             if effect != nil { swatch(.shadow) }
         }
         if let effect {
+            blendModePicker(selection: Binding(get: { effect.blendMode }, set: { mode in
+                session.changeEffects { $0.shadow?.blendMode = mode }
+            }))
             slider("Opacity", value: Binding(get: { CGFloat(effect.opacity * 100) }, set: { value in
                 session.changeEffects { $0.shadow?.opacity = Double(value) / 100 }
             }), range: 0...100, unit: "%")
@@ -92,6 +98,9 @@ struct EffectsSheet: View {
             if effect != nil { swatch(.colorOverlay) }
         }
         if let effect {
+            blendModePicker(selection: Binding(get: { effect.blendMode }, set: { mode in
+                session.changeEffects { $0.colorOverlay?.blendMode = mode }
+            }))
             slider("Opacity", value: Binding(get: { CGFloat(effect.opacity * 100) }, set: { value in
                 session.changeEffects { $0.colorOverlay?.opacity = Double(value) / 100 }
             }), range: 0...100, unit: "%")
@@ -106,6 +115,9 @@ struct EffectsSheet: View {
             if effect != nil { swatch(.innerShadow) }
         }
         if let effect {
+            blendModePicker(selection: Binding(get: { effect.blendMode }, set: { mode in
+                session.changeEffects { $0.innerShadow?.blendMode = mode }
+            }))
             slider("Opacity", value: Binding(get: { CGFloat(effect.opacity * 100) }, set: { value in
                 session.changeEffects { $0.innerShadow?.opacity = Double(value) / 100 }
             }), range: 0...100, unit: "%")
@@ -132,6 +144,9 @@ struct EffectsSheet: View {
             if effect != nil { swatch(.outerGlow) }
         }
         if let effect {
+            blendModePicker(selection: Binding(get: { effect.blendMode }, set: { mode in
+                session.changeEffects { $0.outerGlow?.blendMode = mode }
+            }))
             slider("Size", value: Binding(get: { effect.size }, set: { size in
                 session.changeEffects { $0.outerGlow?.size = size }
             }), range: 0...100, inputRange: 0...500, unit: "px")
@@ -149,12 +164,28 @@ struct EffectsSheet: View {
             if effect != nil { swatch(.innerGlow) }
         }
         if let effect {
+            blendModePicker(selection: Binding(get: { effect.blendMode }, set: { mode in
+                session.changeEffects { $0.innerGlow?.blendMode = mode }
+            }))
             slider("Size", value: Binding(get: { effect.size }, set: { size in
                 session.changeEffects { $0.innerGlow?.size = size }
             }), range: 0...100, inputRange: 0...500, unit: "px")
             slider("Opacity", value: Binding(get: { CGFloat(effect.opacity * 100) }, set: { value in
                 session.changeEffects { $0.innerGlow?.opacity = Double(value) / 100 }
             }), range: 0...100, unit: "%")
+        }
+    }
+
+    private func blendModePicker(title: String = "Mode", selection: Binding<LayerBlendMode>) -> some View {
+        HStack(spacing: 10) {
+            Text(title).frame(width: 64, alignment: .leading)
+            Picker(title, selection: selection) {
+                ForEach(LayerBlendMode.allCases, id: \.self) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .labelsHidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
