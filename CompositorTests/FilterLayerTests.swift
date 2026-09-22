@@ -181,6 +181,61 @@ struct FilterLayerTests {
         let masked = try await rendered(s)
         #expect(masked == [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255])
     }
+
+    @Test func addFilterLayerAndUndoRedo() throws {
+        let s = EditorSession(); s.createDocument(width: 10, height: 10)
+        s.addFilterLayer(.gaussianBlur)
+        let id = try #require(s.activeLayerID)
+        let layer = try #require(s.activeLayer)
+        #expect(layer.filter?.kind == .gaussianBlur)
+        #expect(layer.isFilterLayer)
+        #expect(s.filterEditingID == id)
+
+        var updated = layer.filter!
+        updated.settings.radius = 25
+        s.beginEdit("Change Blur Radius")
+        s.updateFilterLayer(id, value: updated)
+        s.endEdit()
+
+        #expect(s.activeLayer?.filter?.settings.radius == 25)
+
+        s.undo()
+        #expect(s.activeLayer?.filter?.settings.radius == 10)
+
+        s.redo()
+        #expect(s.activeLayer?.filter?.settings.radius == 25)
+
+        // Undo back to empty document
+        s.undo() // undo parameter edit
+        s.undo() // undo layer creation
+        #expect(s.document?.layers.isEmpty == true)
+
+        s.redo() // redo layer creation
+        #expect(s.document?.layers.count == 1)
+        #expect(s.activeLayer?.filter?.kind == .gaussianBlur)
+    }
+
+    @Test func duplicateFilterLayer() throws {
+        let s = EditorSession(); s.createDocument(width: 10, height: 10)
+        s.addFilterLayer(.motionBlur)
+        let id = try #require(s.activeLayerID)
+
+        var custom = LayerFilter(kind: .motionBlur)
+        custom.settings.angle = 45
+        custom.settings.distance = 60
+        s.updateFilterLayer(id, value: custom)
+        s.filterEditingID = nil
+
+        s.duplicateActiveLayer()
+        #expect(s.document?.layers.count == 2)
+        let duplicate = try #require(s.activeLayer)
+        #expect(duplicate.id != id)
+        #expect(duplicate.name == "Motion Blur copy")
+        #expect(duplicate.isFilterLayer)
+        #expect(duplicate.filter == custom)
+        #expect(duplicate.filter?.settings.angle == 45)
+        #expect(duplicate.filter?.settings.distance == 60)
+    }
 }
 
 private extension CGImage {

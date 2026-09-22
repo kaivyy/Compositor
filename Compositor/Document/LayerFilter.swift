@@ -136,3 +136,31 @@ nonisolated struct LayerFilter: Codable, Equatable, Sendable {
         return try PixelFilter.run(job)
     }
 }
+
+extension EditorSession {
+    func addFilterLayer(_ kind: FilterLayerKind) {
+        guard canEditLayers, let document, document.layers.count < 10_000 else { return }
+        var layer = ImageLayer(name: kind.rawValue, blankSize: document.size)
+        var filter = LayerFilter(kind: kind)
+        if kind == .gradientMap {
+            filter.settings.gradientMap = GradientMapSettings(shadows: AdjustmentColor(foregroundColor), highlights: AdjustmentColor(backgroundColor))
+        }
+        if kind == .grain { filter.settings.grain.seed = .random(in: .min ... .max) }
+        if kind == .addNoise { filter.settings.seed = .random(in: .min ... .max) }
+        layer.filter = filter
+        layer.parentID = activeLayer?.isGroup == true ? activeLayerID : activeLayer?.parentID
+        let index = document.layers.firstIndex { $0.id == activeLayerID }.map { $0 + 1 } ?? document.layers.count
+        beginEdit("New \(kind.rawValue) Filter")
+        self.document?.layers.insert(layer, at: index)
+        if let parent = layer.parentID { collapsedGroupIDs.remove(parent) }
+        activeLayerID = layer.id
+        endEdit()
+        if kind.isEditable { filterEditingID = layer.id }
+    }
+
+    func updateFilterLayer(_ id: UUID, value: LayerFilter) {
+        guard let index = document?.layers.firstIndex(where: { $0.id == id }), value.isValid else { return }
+        document?.layers[index].filter = value
+        brushRevision += 1
+    }
+}

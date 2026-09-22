@@ -180,7 +180,7 @@ final class ProjectWorkspace {
         }
         do {
             for i in copied.indices where copied[i].maskSourceID.map({ !included.contains($0) }) == true {
-                if copied[i].adjustment != nil { copied[i].maskSourceID = nil; continue }
+                if copied[i].adjustment != nil || copied[i].filter != nil { copied[i].maskSourceID = nil; continue }
                 let layerID = copied[i].id
                 copied[i].asset = try await Task.detached(priority: .userInitiated) { try LiveMaskBaker.bake(snapshot, target: layerID) }.value
                 copied[i].maskSourceID = nil
@@ -196,7 +196,7 @@ final class ProjectWorkspace {
                 mask?.placement?.origin.x += center.x-anchor.x; mask?.placement?.origin.y += center.y-anchor.y
                 return ImageLayer(id: mapping[layer.id]!, asset: layer.asset, name: layer.name, isVisible: layer.isVisible,
                     transform: transform, parentID: layer.parentID.flatMap { mapping[$0] }, isGroup: layer.isGroup,
-                    opacity: layer.opacity, blendMode: layer.blendMode, mask: mask, maskSourceID: layer.maskSourceID.flatMap { mapping[$0] }, adjustment: layer.adjustment, shape: layer.shape, text: layer.text)
+                    opacity: layer.opacity, blendMode: layer.blendMode, mask: mask, maskSourceID: layer.maskSourceID.flatMap { mapping[$0] }, adjustment: layer.adjustment, shape: layer.shape, text: layer.text, filter: layer.filter)
             }
             target.session.isProjectBusy = false
             target.session.beginEdit("Copy Layers from Project")
