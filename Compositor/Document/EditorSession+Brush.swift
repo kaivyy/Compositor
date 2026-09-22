@@ -7,7 +7,7 @@ extension EditorSession {
         canEditLayers && selectedLayerIDs.count == 1 && (activeLayer?.isGroup == false || isMaskSelected) && selection?.isEmpty != true
             && activeLayerID.map { document?.effectiveVisibleIDs.contains($0) == true } == true
             && (!isMaskSelected || activeLayer?.mask?.isEnabled == true)
-            && (isMaskSelected || activeLayer?.adjustment == nil)
+            && (isMaskSelected || (activeLayer?.adjustment == nil && activeLayer?.filter == nil))
     }
     /// Tiled raster edit of the active layer's pixels or mask, within the shared pixel budgets.
     func makeRasterEdit(for layer: ImageLayer, settings: BrushSettings = BrushSettings()) throws -> BrushStroke {

@@ -458,6 +458,84 @@ struct FilterLayerTests {
             #expect(result.height == 8)
         }
     }
+
+    @Test func filterLayerPaintingGuardsAndMaskPainting() throws {
+        let s = EditorSession()
+        s.createDocument(width: 20, height: 20)
+        s.addFilterLayer(.gaussianBlur)
+        s.filterEditingID = nil
+        let originalFilter = try #require(s.activeLayer?.filter)
+
+        // 1. Without mask selected: cannot enter normal raster painting path
+        s.isMaskSelected = false
+        #expect(!s.canPaint)
+        #expect(!s.canEditPixels)
+
+        // Attempting to begin a brush does nothing
+        s.tool = .brush
+        s.beginBrush(at: CGPoint(x: 10, y: 10))
+        #expect(s.brushStroke == nil)
+
+        // Filter metadata remains intact, layer is not rasterized
+        #expect(s.activeLayer?.filter == originalFilter)
+        #expect(s.activeLayer?.asset == nil)
+        #expect(s.activeLayer?.isFilterLayer == true)
+
+        // 2. With a mask added and selected: mask painting is allowed through the mask path
+        s.addLayerMask()
+        s.isMaskSelected = true
+        #expect(s.canPaint)
+        #expect(s.canEditPixels)
+
+        s.beginBrush(at: CGPoint(x: 10, y: 10))
+        #expect(s.brushStroke != nil)
+        s.cancelBrush()
+
+        // Filter metadata still intact
+        #expect(s.activeLayer?.filter == originalFilter)
+        #expect(s.activeLayer?.asset == nil)
+        #expect(s.activeLayer?.isFilterLayer == true)
+    }
+
+    @Test func filterLayerCannotBeClippingBase() throws {
+        let s = EditorSession()
+        s.createDocument(width: 20, height: 20)
+        s.addBlankLayer()
+        let baseID = try #require(s.activeLayerID)
+
+        s.addFilterLayer(.invert)
+        let filterID = try #require(s.activeLayerID)
+
+        s.addBlankLayer()
+        let topID = try #require(s.activeLayerID)
+
+        // 1. Filter Layer can be clipped to a normal base layer
+        #expect(s.canLinkMask(source: baseID, target: filterID))
+
+        // 2. Filter Layer CANNOT be linked as the clipping source/base for top layer
+        #expect(!s.canLinkMask(source: filterID, target: topID))
+
+        // 3. canToggleClippingMask when top layer is above filter layer returns false
+        s.selectLayer(topID)
+        #expect(!s.canToggleClippingMask(topID))
+
+        // 4. LiveMaskGraph validation rejects records with filter as source
+        var records = s.document!.layers.map(\.hierarchyRecord)
+        let topIndex = try #require(records.firstIndex(where: { $0.id == topID }))
+        records[topIndex].maskSourceID = filterID
+        #expect(throws: ProjectError.self) {
+            try LiveMaskGraph.validate(records)
+        }
+
+        // 5. Existing Adjustment Layer restrictions remain unchanged
+        s.addAdjustment(.levels)
+        s.adjustmentEditingID = nil
+        let adjID = try #require(s.activeLayerID)
+        #expect(!s.canLinkMask(source: adjID, target: topID))
+
+        // 6. Existing valid clipping relationships still work (top layer clipped to base layer)
+        #expect(s.canLinkMask(source: baseID, target: topID))
+    }
 }
 
 private extension CGImage {

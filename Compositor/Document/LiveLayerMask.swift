@@ -11,7 +11,7 @@ nonisolated enum LiveMaskGraph {
             while let id = current {
                 guard path.count < 256, path.insert(id).inserted, let record = records[id] else { throw ProjectError.invalid }
                 if let source = record.maskSourceID {
-                    guard !((record.isGroup ?? false)), records[source] != nil, records[source]?.isGroup != true, records[source]?.adjustment == nil else { throw ProjectError.invalid }
+                    guard !((record.isGroup ?? false)), records[source] != nil, records[source]?.isGroup != true, records[source]?.adjustment == nil, records[source]?.filter == nil else { throw ProjectError.invalid }
                 }
                 current = record.maskSourceID
             }
@@ -22,7 +22,7 @@ nonisolated enum LiveMaskGraph {
 extension EditorSession {
     func canLinkMask(source: UUID, target: UUID) -> Bool {
         guard canEditLayers, source != target, let layers = document?.layers,
-              layers.contains(where: { $0.id == source && !$0.isGroup && $0.adjustment == nil }),
+              layers.contains(where: { $0.id == source && !$0.isGroup && $0.adjustment == nil && $0.filter == nil }),
               layers.contains(where: { $0.id == target && !$0.isGroup }) else { return false }
         var records = layers.map(\.hierarchyRecord)
         records[records.firstIndex(where: { $0.id == target })!].maskSourceID = source
