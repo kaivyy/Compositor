@@ -116,6 +116,25 @@ final class ProjectController {
         } catch { await showError("Couldn’t trim image", error: error) }
     }
 
+    func collageGrid() async {
+        guard let window, let document = session.document, begin() else { return }
+        defer { session.isProjectBusy = false }
+        let options: CollageOptions? = await withCheckedContinuation { continuation in
+            let sheet = NSWindow()
+            sheet.styleMask = [.titled, .fullSizeContentView]
+            sheet.title = "New Collage Grid"
+            sheet.contentViewController = NSHostingController(rootView: CollageSheet(canvasSize: CGSize(width: document.width, height: document.height)) { options in
+                window.endSheet(sheet)
+                sheet.orderOut(nil)
+                sheet.contentViewController = nil
+                continuation.resume(returning: options)
+            })
+            window.beginSheet(sheet)
+        }
+        guard let options else { return }
+        session.addCollage(options: options)
+    }
+
     func exportJPEG() async {
         guard let window, session.document != nil, begin() else { return }
         defer { session.isProjectBusy = false }
