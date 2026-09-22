@@ -113,6 +113,7 @@ final class EditorSession {
     @ObservationIgnored var effectsPreviews = EffectsPreviewCache()
     var liveTextEffectsPreview: LiveTextEffectsPreview?
     @ObservationIgnored var liveTextPreviewWorkItem: DispatchWorkItem?
+    var activeChannel: EditChannel = .rgb
     var projectURL: URL?
     /// Blocks overlapping edits immediately. Not observed by the UI: controls only dim via
     /// `showsBusy`, after an operation has run long enough to be worth showing, so quick

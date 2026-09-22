@@ -470,6 +470,7 @@ final class CanvasView: NSView {
         }
         let folderMasks: [FolderMask]
         let liveTextPreviewID: UUID?
+        let activeChannel: EditChannel
     }
 
     @discardableResult
@@ -499,7 +500,8 @@ final class CanvasView: NSView {
                 DisplayState.FolderMask(id: $0.id, maskID: $0.mask?.enabledImage.map { ObjectIdentifier($0) },
                                         transform: session.displayedTransform(for: $0))
             },
-            liveTextPreviewID: session.liveTextEffectsPreview?.id)
+            liveTextPreviewID: session.liveTextEffectsPreview?.id,
+            activeChannel: session.activeChannel)
         var changed = false
         if displayedState != state {
             if let previous = displayedState, previous.documentID == state.documentID,
@@ -936,15 +938,22 @@ final class CanvasView: NSView {
                     image: previous?.raster == nil ? previous?.image : nil, raster: previous?.raster,
                     transform: transform, center: center(transform.center), scale: scale,
                     opacity: opacity, blendMode: blendMode(of: layer), in: context)
-            } else if let asset = layer.asset, let raster = asset.raster, session.hueSaturation?.previewImage(for: layer.id) == nil && session.levels?.previewImage(for: layer.id) == nil && session.filterEdit?.previewImage(for: layer.id) == nil {
+            } else if let asset = layer.asset, let raster = asset.raster, session.hueSaturation?.previewImage(for: layer.id) == nil && session.levels?.previewImage(for: layer.id) == nil && session.filterEdit?.previewImage(for: layer.id) == nil && (session.activeChannel == .rgb || layer.id != session.activeLayerID) {
                 TiledLayerRenderer.drawRaster(raster, transform: transform, center: center(transform.center), scale: scale,
                     opacity: opacity, blendMode: blendMode(of: layer),
                     mask: mask, in: context)
             } else if let image = session.filterEdit?.previewImage(for: layer.id) ?? session.levels?.previewImage(for: layer.id) ?? session.hueSaturation?.previewImage(for: layer.id) ?? layer.asset?.image {
+                let renderImage: CGImage = {
+                    if session.activeChannel != .rgb, layer.id == session.activeLayerID {
+                        let buffer = RGBAChannelBuffer(image: image)
+                        return buffer.channelIsolationImage(for: session.activeChannel) ?? image
+                    }
+                    return image
+                }()
                 // LayerRenderer picks a sharp reduction for the image and its mask itself.
-                LayerRenderer.draw(image, transform: transform,
+                LayerRenderer.draw(renderImage, transform: transform,
                     center: center(transform.center), scale: scale,
-                    opacity: opacity, blendMode: blendMode(of: layer),
+                    opacity: opacity, blendMode: session.activeChannel != .rgb && layer.id == session.activeLayerID ? .normal : blendMode(of: layer),
                     mask: mask, in: context)
             }
         }
