@@ -361,6 +361,103 @@ struct FilterLayerTests {
         s.redo()
         #expect(s.activeLayer?.filter?.settings.radius == 42)
     }
+
+    @Test func filterLayerClippedToBaseSilhouette() async throws {
+        let s = EditorSession(); s.createDocument(width: 2, height: 2)
+        // Base layer: only top-left pixel is opaque white, other 3 pixels transparent
+        let baseAsset = try makeImage(width: 2, height: 2, color: .white, alpha: [255, 0, 0, 0])
+        s.insert(baseAsset)
+        let baseID = try #require(s.activeLayerID)
+
+        // Filter layer clipped to base
+        var filterLayer = ImageLayer(name: "Invert Filter", blankSize: s.document!.size)
+        filterLayer.filter = LayerFilter(kind: .invert)
+        filterLayer.maskSourceID = baseID
+        s.document?.layers.append(filterLayer)
+
+        let out = try await rendered(s)
+        // Top-left pixel is inverted to black (0, 0, 0, 255)
+        #expect(Array(out[0..<4]) == [0, 0, 0, 255])
+        // Other 3 pixels remain transparent (alpha == 0)
+        #expect(out[7] == 0)
+        #expect(out[11] == 0)
+        #expect(out[15] == 0)
+    }
+
+    @Test func filterLayerInsideGroupVisibilityToggle() async throws {
+        let s = EditorSession(); s.createDocument(width: 2, height: 2)
+        s.insert(try makeImage(width: 2, height: 2, color: .white, alpha: [255, 255, 255, 255]))
+
+        s.addGroup()
+        let groupID = try #require(s.activeLayerID)
+
+        s.addFilterLayer(.invert)
+        s.filterEditingID = nil
+        #expect(s.activeLayer?.parentID == groupID)
+
+        // When group is visible, filter inverts white to black
+        let inverted = try await rendered(s)
+        #expect(inverted == [0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255])
+
+        // Hide group: filter should not be rendered, canvas returns to white
+        s.toggleLayerVisibility(groupID)
+        let original = try await rendered(s)
+        #expect(original == [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255])
+
+        // Show group again: filter is active again
+        s.toggleLayerVisibility(groupID)
+        let backToInverted = try await rendered(s)
+        #expect(backToInverted == [0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255])
+    }
+
+    @Test func multipleStackedFiltersSequential() async throws {
+        let s = EditorSession(); s.createDocument(width: 2, height: 2)
+        s.insert(try makeImage(width: 2, height: 2, color: PaletteColor(red: 1, green: 0, blue: 0), alpha: [255, 255, 255, 255]))
+
+        var filter1 = ImageLayer(name: "Invert 1", blankSize: s.document!.size)
+        filter1.filter = LayerFilter(kind: .invert)
+        s.document?.layers.append(filter1)
+
+        // After one invert: red becomes cyan (0, 255, 255, 255)
+        let cyan = try await rendered(s)
+        #expect(Array(cyan[0..<4]) == [0, 255, 255, 255])
+
+        var filter2 = ImageLayer(name: "Invert 2", blankSize: s.document!.size)
+        filter2.filter = LayerFilter(kind: .invert)
+        s.document?.layers.append(filter2)
+
+        // After second invert: cyan becomes red again (255, 0, 0, 255)
+        let redAgain = try await rendered(s)
+        #expect(Array(redAgain[0..<4]) == [255, 0, 0, 255])
+    }
+
+    @Test func filterLayerBlendModeMultiply() async throws {
+        let s = EditorSession(); s.createDocument(width: 2, height: 2)
+        s.insert(try makeImage(width: 2, height: 2, color: PaletteColor(red: 0.5, green: 0.5, blue: 0.5), alpha: [255, 255, 255, 255]))
+
+        var filterLayer = ImageLayer(name: "Invert Multiply", blankSize: s.document!.size)
+        filterLayer.filter = LayerFilter(kind: .invert)
+        filterLayer.blendMode = .multiply
+        s.document?.layers.append(filterLayer)
+
+        let out = try await rendered(s)
+        // 128 inverted is 127; 128 * 127 / 255 ≈ 64
+        #expect(abs(Int(out[0]) - 64) <= 2)
+        #expect(abs(Int(out[1]) - 64) <= 2)
+        #expect(abs(Int(out[2]) - 64) <= 2)
+        #expect(out[3] == 255)
+    }
+
+    @Test func allElevenFilterKindsApplySmokeTest() throws {
+        let baseImage = try #require(CGImage.makeSolidColor(width: 8, height: 8, color: CGColor(red: 0.5, green: 0.3, blue: 0.8, alpha: 1.0)))
+        for kind in FilterLayerKind.allCases {
+            var filter = LayerFilter(kind: kind)
+            if kind == .grain { filter.settings.grain.seed = 12345 }
+            let result = try filter.apply(baseImage)
+            #expect(result.width == 8)
+            #expect(result.height == 8)
+        }
+    }
 }
 
 private extension CGImage {
