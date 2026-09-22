@@ -236,6 +236,79 @@ struct FilterLayerTests {
         #expect(duplicate.filter?.settings.angle == 45)
         #expect(duplicate.filter?.settings.distance == 60)
     }
+
+    @Test func filterLayerProjectSaveLoadRoundTrip() async throws {
+        let s = EditorSession(); s.createDocument(width: 10, height: 10)
+        s.addFilterLayer(.gaussianBlur)
+        let id = try #require(s.activeLayerID)
+        var custom = LayerFilter(kind: .gaussianBlur)
+        custom.settings.radius = 18.5
+        s.updateFilterLayer(id, value: custom)
+        s.filterEditingID = nil
+
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("FilterLayer-\(UUID()).comp")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let snapshot = try #require(s.projectSnapshot())
+        #expect(snapshot.manifest.version == 9)
+        try await ProjectStore.shared.save(snapshot, to: url)
+
+        let loaded = try await ProjectStore.shared.load(from: url)
+        #expect(loaded.manifest.version == 9)
+        #expect(loaded.manifest.layers.last?.filter == custom)
+
+        let restored = EditorSession()
+        restored.installProject(loaded, from: url)
+        #expect(restored.document?.layers.last?.filter == custom)
+        #expect(restored.document?.layers.last?.isFilterLayer == true)
+    }
+
+    @Test func filterLayerLegacyManifestDecodesWithoutFilter() throws {
+        let record = ProjectLayerRecord(
+            id: UUID(),
+            name: "Legacy Layer",
+            isVisible: true,
+            transform: LayerTransform(origin: .zero, size: CGSize(width: 100, height: 100)),
+            imageFile: "test.png"
+        )
+        var manifest = ProjectManifest(documentID: UUID(), width: 100, height: 100, activeLayerID: nil, layers: [record])
+        manifest.version = 8
+
+        let data = try JSONEncoder().encode(manifest)
+        var dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        var layers = dict["layers"] as! [[String: Any]]
+        layers[0].removeValue(forKey: "filter")
+        dict["layers"] = layers
+        let legacyData = try JSONSerialization.data(withJSONObject: dict)
+
+        let decoded = try JSONDecoder().decode(ProjectManifest.self, from: legacyData)
+        #expect(decoded.version == 8)
+        #expect(decoded.layers.first?.filter == nil)
+    }
+
+    @Test func filterLayerInvalidManifestRejects() async throws {
+        let s = EditorSession(); s.createDocument(width: 10, height: 10)
+        s.addFilterLayer(.gaussianBlur)
+        s.filterEditingID = nil
+
+        let snapshot = try #require(s.projectSnapshot())
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("FilterInvalid-\(UUID()).comp")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Test 1: Filter layer in older manifest version (< 9) is rejected
+        var v8Manifest = snapshot.manifest
+        v8Manifest.version = 8
+        await #expect(throws: (any Error).self) {
+            try await ProjectStore.shared.save(ProjectSnapshot(manifest: v8Manifest, images: [:]), to: url)
+        }
+
+        // Test 2: Invalid filter settings (negative radius) is rejected
+        var invalidSettingsManifest = snapshot.manifest
+        invalidSettingsManifest.layers[0].filter?.settings.radius = -10
+        await #expect(throws: (any Error).self) {
+            try await ProjectStore.shared.save(ProjectSnapshot(manifest: invalidSettingsManifest, images: [:]), to: url)
+        }
+    }
 }
 
 private extension CGImage {
