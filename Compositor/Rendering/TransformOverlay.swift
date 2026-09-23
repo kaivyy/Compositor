@@ -559,46 +559,69 @@ final class TransformOverlay: NSView {
 
         for (sIdx, subpath) in vector.subpaths.enumerated() {
             for (aIdx, pt) in subpath.points.enumerated() {
+                let anchorIdx = VectorAnchorIndex(subpathIndex: sIdx, anchorIndex: aIdx)
                 let anchorView = pt.anchor.applying(layerToView)
-                let isSelected = selection?.selectedAnchors.contains(VectorAnchorIndex(subpathIndex: sIdx, anchorIndex: aIdx)) == true
+                let isSelected = selection?.selectedAnchors.contains(anchorIdx) == true
 
                 if isSelected {
                     // Draw Bézier handles if present
-                    let anchorIdx = VectorAnchorIndex(subpathIndex: sIdx, anchorIndex: aIdx)
                     let stalkPath = CGMutablePath()
-                    var handlesToDraw: [(point: CGPoint, isHandleSelected: Bool)] = []
+                    var handlesToDraw: [(point: CGPoint, side: DirectSelectionHandleSide)] = []
 
                     if let prev = pt.previousControl {
                         let prevView = prev.applying(layerToView)
                         stalkPath.move(to: anchorView)
                         stalkPath.addLine(to: prevView)
-                        let isPrevSelected = (selection?.selectedHandle == SelectedHandle(anchorIndex: anchorIdx, side: .previous))
-                        handlesToDraw.append((prevView, isPrevSelected))
+                        handlesToDraw.append((prevView, .previous))
                     }
                     if let next = pt.nextControl {
                         let nextView = next.applying(layerToView)
                         stalkPath.move(to: anchorView)
                         stalkPath.addLine(to: nextView)
-                        let isNextSelected = (selection?.selectedHandle == SelectedHandle(anchorIndex: anchorIdx, side: .next))
-                        handlesToDraw.append((nextView, isNextSelected))
+                        handlesToDraw.append((nextView, .next))
                     }
 
                     if !handlesToDraw.isEmpty {
                         context.saveGState()
+                        // Subordinate dark contrast line under handle stalk
                         context.addPath(stalkPath)
-                        context.setStrokeColor(NSColor.controlAccentColor.withAlphaComponent(0.7).cgColor)
+                        context.setStrokeColor(NSColor.black.withAlphaComponent(0.35).cgColor)
+                        context.setLineWidth(2)
+                        context.strokePath()
+
+                        // Subordinate accent line for stalk
+                        context.addPath(stalkPath)
+                        context.setStrokeColor(NSColor.controlAccentColor.withAlphaComponent(0.85).cgColor)
                         context.setLineWidth(1)
                         context.strokePath()
 
                         for item in handlesToDraw {
+                            let handle = SelectedHandle(anchorIndex: anchorIdx, side: item.side)
+                            let vState = session.visualStateForHandle(handle, in: layer.id)
                             let handleRect = CGRect(x: item.point.x - 3.5, y: item.point.y - 3.5, width: 7, height: 7)
-                            if item.isHandleSelected {
+
+                            // Hover halo if hovered
+                            if vState.isHovered {
+                                let hoverRect = CGRect(x: item.point.x - 5.5, y: item.point.y - 5.5, width: 11, height: 11)
+                                context.setStrokeColor(NSColor.controlAccentColor.withAlphaComponent(0.5).cgColor)
+                                context.setLineWidth(2)
+                                context.strokeEllipse(in: hoverRect)
+                            }
+
+                            // Dark contrast outline
+                            context.setStrokeColor(NSColor.black.withAlphaComponent(0.5).cgColor)
+                            context.setLineWidth(2.5)
+                            context.strokeEllipse(in: handleRect)
+
+                            if vState.isSelected {
+                                // Selected handle: filled accent circle with white inner border
                                 context.setFillColor(NSColor.controlAccentColor.cgColor)
                                 context.fillEllipse(in: handleRect)
                                 context.setStrokeColor(NSColor.white.cgColor)
                                 context.setLineWidth(1.5)
                                 context.strokeEllipse(in: handleRect)
                             } else {
+                                // Unselected handle: white circle with accent border
                                 context.setFillColor(NSColor.white.cgColor)
                                 context.fillEllipse(in: handleRect)
                                 context.setStrokeColor(NSColor.controlAccentColor.cgColor)
@@ -608,23 +631,73 @@ final class TransformOverlay: NSView {
                         }
                         context.restoreGState()
                     }
+                }
 
-                    // Selected anchor: filled accent with white border
-                    let rect = CGRect(x: anchorView.x - 3.5, y: anchorView.y - 3.5, width: 7, height: 7)
+                // Draw Anchor Point
+                let anchorVState = session.visualStateForAnchor(anchorIdx, in: layer.id)
+                let rect = CGRect(x: anchorView.x - 3.5, y: anchorView.y - 3.5, width: 7, height: 7)
+
+                // Hover halo if hovered
+                if anchorVState.isHovered {
+                    let hoverRect = CGRect(x: anchorView.x - 5.5, y: anchorView.y - 5.5, width: 11, height: 11)
+                    context.setStrokeColor(NSColor.controlAccentColor.withAlphaComponent(0.5).cgColor)
+                    context.setLineWidth(2)
+                    context.stroke(hoverRect)
+                }
+
+                // Dark contrast backing
+                context.setStrokeColor(NSColor.black.withAlphaComponent(0.6).cgColor)
+                context.setLineWidth(2.5)
+                context.stroke(rect)
+
+                if anchorVState.isSelected {
+                    // Selected anchor: solid accent fill with crisp white border
                     context.setFillColor(NSColor.controlAccentColor.cgColor)
                     context.fill(rect)
                     context.setStrokeColor(NSColor.white.cgColor)
                     context.setLineWidth(1.5)
                     context.stroke(rect)
                 } else {
-                    // Unselected anchor: white with accent border
-                    let rect = CGRect(x: anchorView.x - 3.5, y: anchorView.y - 3.5, width: 7, height: 7)
-                    context.setFillColor(NSColor.white.cgColor)
-                    context.fill(rect)
-                    context.setStrokeColor(NSColor.controlAccentColor.cgColor)
-                    context.setLineWidth(1)
+                    // Unselected anchor: visually neutral, hollow (document content shows through), crisp white inner border
+                    context.setStrokeColor(NSColor.white.cgColor)
+                    context.setLineWidth(1.5)
                     context.stroke(rect)
                 }
+            }
+        }
+
+        // Draw hover feedback for an anchor on a different visible vector layer if targeted
+        if let hover = session.directSelectionHoverTarget,
+           hover.layerID != layer.id,
+           let hoverLayer = document.layers.first(where: { $0.id == hover.layerID && $0.isVisible && $0.vector != nil }),
+           let hoverVector = hoverLayer.vector {
+            let hLayerToDoc = hoverLayer.transform.layerToDocument
+            var hLayerToView = hLayerToDoc.concatenating(docToView)
+            let s = hover.anchorIndex.subpathIndex
+            let a = hover.anchorIndex.anchorIndex
+            if hoverVector.subpaths.indices.contains(s),
+               hoverVector.subpaths[s].points.indices.contains(a) {
+                let pt = hoverVector.subpaths[s].points[a]
+                let ptDoc: CGPoint
+                switch hover.kind {
+                case .anchor:
+                    ptDoc = pt.anchor
+                case .handle(.previous):
+                    ptDoc = pt.previousControl ?? pt.anchor
+                case .handle(.next):
+                    ptDoc = pt.nextControl ?? pt.anchor
+                }
+                let ptView = ptDoc.applying(hLayerToView)
+                let hoverRect = CGRect(x: ptView.x - 5.5, y: ptView.y - 5.5, width: 11, height: 11)
+                context.saveGState()
+                context.setStrokeColor(NSColor.controlAccentColor.withAlphaComponent(0.6).cgColor)
+                context.setLineWidth(2)
+                if case .handle = hover.kind {
+                    context.strokeEllipse(in: hoverRect)
+                } else {
+                    context.stroke(hoverRect)
+                }
+                context.restoreGState()
             }
         }
 

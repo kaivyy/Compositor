@@ -48,6 +48,22 @@ nonisolated struct SelectedHandle: Hashable, Equatable, Sendable {
     }
 }
 
+/// The visual state for rendering a vector anchor or handle in Direct Selection.
+nonisolated enum DirectSelectionVisualState: Hashable, Equatable, Sendable {
+    case unselected
+    case selected
+    case hoveredUnselected
+    case hoveredSelected
+
+    var isSelected: Bool {
+        self == .selected || self == .hoveredSelected
+    }
+
+    var isHovered: Bool {
+        self == .hoveredUnselected || self == .hoveredSelected
+    }
+}
+
 /// Transient selection state for vector anchor points and optional active control handle.
 /// Kept purely in memory within EditorSession; never serialized to VectorModel or CanvasDocument.
 struct VectorSelection: Equatable, Sendable {
@@ -373,6 +389,56 @@ extension EditorSession {
     func deselectVectorAnchors() {
         vectorSelection = nil
         contextualHitTarget = nil
+        directSelectionHoverTarget = nil
+    }
+
+    /// Updates the transient Direct Selection hover target at the specified view point.
+    @discardableResult
+    func updateDirectSelectionHover(at viewPoint: CGPoint?) -> DirectSelectionHitTarget? {
+        guard tool == .directSelection, canEditLayers, let viewPoint else {
+            if directSelectionHoverTarget != nil {
+                directSelectionHoverTarget = nil
+            }
+            return nil
+        }
+        let target = hitTestDirectSelection(at: viewPoint)
+        if directSelectionHoverTarget != target {
+            directSelectionHoverTarget = target
+        }
+        return target
+    }
+
+    /// Clears the transient Direct Selection hover target.
+    func clearDirectSelectionHover() {
+        directSelectionHoverTarget = nil
+    }
+
+    /// Evaluates the visual state of a specific anchor for rendering.
+    func visualStateForAnchor(_ anchorIndex: VectorAnchorIndex, in layerID: UUID) -> DirectSelectionVisualState {
+        let isSelected = vectorSelection?.layerID == layerID && vectorSelection?.selectedAnchors.contains(anchorIndex) == true
+        let isHovered = directSelectionHoverTarget?.layerID == layerID
+            && directSelectionHoverTarget?.anchorIndex == anchorIndex
+            && directSelectionHoverTarget?.kind == .anchor
+        switch (isSelected, isHovered) {
+        case (false, false): return .unselected
+        case (true, false): return .selected
+        case (false, true): return .hoveredUnselected
+        case (true, true): return .hoveredSelected
+        }
+    }
+
+    /// Evaluates the visual state of a specific Bézier handle for rendering.
+    func visualStateForHandle(_ handle: SelectedHandle, in layerID: UUID) -> DirectSelectionVisualState {
+        let isSelected = vectorSelection?.layerID == layerID && vectorSelection?.selectedHandle == handle
+        let isHovered = directSelectionHoverTarget?.layerID == layerID
+            && directSelectionHoverTarget?.anchorIndex == handle.anchorIndex
+            && directSelectionHoverTarget?.kind == .handle(handle.side)
+        switch (isSelected, isHovered) {
+        case (false, false): return .unselected
+        case (true, false): return .selected
+        case (false, true): return .hoveredUnselected
+        case (true, true): return .hoveredSelected
+        }
     }
 
     /// Resolves the contextual hit target for Direct Selection at a given view point.
@@ -414,6 +480,8 @@ extension EditorSession {
               let index = document?.layers.firstIndex(where: { $0.id == layerID }),
               let vector = document?.layers[index].vector else { return }
 
+        directSelectionHoverTarget = nil
+
         if toggle {
             selectVectorAnchor(clickedAnchor, in: layerID, toggle: true)
             // If it was toggled off, do not initiate drag
@@ -449,6 +517,8 @@ extension EditorSession {
         guard canEditLayers,
               let index = document?.layers.firstIndex(where: { $0.id == target.layerID }),
               let vector = document?.layers[index].vector else { return }
+
+        directSelectionHoverTarget = nil
 
         let handle = SelectedHandle(anchorIndex: target.anchorIndex, side: side)
         selectVectorHandle(handle, in: target.layerID)
@@ -580,6 +650,7 @@ extension EditorSession {
         cancelDirectSelectionDrag()
         vectorSelection = nil
         contextualHitTarget = nil
+        directSelectionHoverTarget = nil
     }
 
     /// Deletes the currently selected vector anchors in Direct Selection mode as a single history transaction.

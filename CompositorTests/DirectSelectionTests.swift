@@ -3,6 +3,7 @@ import Testing
 @testable import Compositor
 
 @MainActor
+@Suite(.serialized)
 struct DirectSelectionTests {
     private func makeSession() -> EditorSession {
         let session = EditorSession()
@@ -1943,5 +1944,378 @@ struct DirectSelectionTests {
         #expect(session.document?.layers.count == initialLayers)
         let vector = session.document!.layers.first(where: { $0.id == layerID })!.vector!
         #expect(vector.subpaths[0].points.count == 2)
+    }
+
+    // 70. Phase 2B-5: Visual-state evaluations for vector anchors
+    @Test func visualStateEvaluationsForAnchor() {
+        let session = makeSession()
+        let layerID = createTriangleLayer(in: session)
+        session.selectTool(.directSelection)
+
+        let a0 = VectorAnchorIndex(subpathIndex: 0, anchorIndex: 0)
+        let a1 = VectorAnchorIndex(subpathIndex: 0, anchorIndex: 1)
+
+        // Both initially unselected
+        #expect(session.visualStateForAnchor(a0, in: layerID) == .unselected)
+        #expect(session.visualStateForAnchor(a1, in: layerID) == .unselected)
+
+        // Select a0
+        session.selectVectorAnchor(a0, in: layerID)
+        #expect(session.visualStateForAnchor(a0, in: layerID) == .selected)
+        #expect(session.visualStateForAnchor(a1, in: layerID) == .unselected)
+
+        // Hover a1 (unselected)
+        session.directSelectionHoverTarget = DirectSelectionHitTarget(layerID: layerID, anchorIndex: a1, kind: .anchor)
+        #expect(session.visualStateForAnchor(a0, in: layerID) == .selected)
+        #expect(session.visualStateForAnchor(a1, in: layerID) == .hoveredUnselected)
+
+        // Hover a0 (selected)
+        session.directSelectionHoverTarget = DirectSelectionHitTarget(layerID: layerID, anchorIndex: a0, kind: .anchor)
+        #expect(session.visualStateForAnchor(a0, in: layerID) == .hoveredSelected)
+        #expect(session.visualStateForAnchor(a1, in: layerID) == .unselected)
+
+        // Clear hover
+        session.clearDirectSelectionHover()
+        #expect(session.visualStateForAnchor(a0, in: layerID) == .selected)
+    }
+
+    // 71. Phase 2B-5: Visual-state evaluations for Bézier handles
+    @Test func visualStateEvaluationsForHandle() {
+        let session = makeSession()
+        let layerID = createCurvedLayer(in: session)
+        session.selectTool(.directSelection)
+
+        let a0 = VectorAnchorIndex(subpathIndex: 0, anchorIndex: 0)
+        let prevHandle = SelectedHandle(anchorIndex: a0, side: .previous)
+        let nextHandle = SelectedHandle(anchorIndex: a0, side: .next)
+
+        // Initially unselected
+        #expect(session.visualStateForHandle(prevHandle, in: layerID) == .unselected)
+        #expect(session.visualStateForHandle(nextHandle, in: layerID) == .unselected)
+
+        // Select nextHandle
+        session.selectVectorHandle(nextHandle, in: layerID)
+        #expect(session.visualStateForHandle(nextHandle, in: layerID) == .selected)
+        #expect(session.visualStateForHandle(prevHandle, in: layerID) == .unselected)
+
+        // Hover prevHandle (unselected)
+        session.directSelectionHoverTarget = DirectSelectionHitTarget(layerID: layerID, anchorIndex: a0, kind: .handle(.previous))
+        #expect(session.visualStateForHandle(prevHandle, in: layerID) == .hoveredUnselected)
+        #expect(session.visualStateForHandle(nextHandle, in: layerID) == .selected)
+
+        // Hover nextHandle (selected)
+        session.directSelectionHoverTarget = DirectSelectionHitTarget(layerID: layerID, anchorIndex: a0, kind: .handle(.next))
+        #expect(session.visualStateForHandle(nextHandle, in: layerID) == .hoveredSelected)
+    }
+
+    // 72. Phase 2B-5: Hover target updates without document or history mutation
+    @Test func hoverTargetUpdatesWithoutDocumentOrHistoryMutation() {
+        let session = makeSession()
+        let layerID = createTriangleLayer(in: session)
+        session.selectTool(.directSelection)
+
+        let initialHistory = session.history.undoCount
+        let initialLayers = session.document?.layers.count
+        let initialVector = session.document?.layers.first(where: { $0.id == layerID })?.vector
+
+        let layer = session.document!.layers.first(where: { $0.id == layerID })!
+        let pt0 = layer.vector!.subpaths[0].points[0]
+        let viewPt0 = session.viewport.viewPoint(from: pt0.anchor.applying(layer.transform.layerToDocument), documentSize: session.document!.size)
+
+        // Hover over anchor 0
+        let target = session.updateDirectSelectionHover(at: viewPt0)
+        #expect(target != nil)
+        #expect(session.directSelectionHoverTarget == target)
+        #expect(target?.anchorIndex == VectorAnchorIndex(subpathIndex: 0, anchorIndex: 0))
+
+        // Document, layers, vector model, and history remain untouched
+        #expect(session.history.undoCount == initialHistory)
+        #expect(session.document?.layers.count == initialLayers)
+        #expect(session.document?.layers.first(where: { $0.id == layerID })?.vector == initialVector)
+        #expect(session.vectorSelection == nil)
+
+        // Move to empty space clears hover
+        let emptyPt = CGPoint(x: 290, y: 290)
+        let cleared = session.updateDirectSelectionHover(at: emptyPt)
+        #expect(cleared == nil)
+        #expect(session.directSelectionHoverTarget == nil)
+    }
+
+    // 73. Phase 2B-5: Right-click on unselected anchor resolves target and returns menu
+    @Test func rightClickOnUnselectedAnchorResolvesTargetAndShowsMenu() {
+        let session = makeSession()
+        let layerID = createTriangleLayer(in: session)
+        session.selectTool(.directSelection)
+
+        let layer = session.document!.layers.first(where: { $0.id == layerID })!
+        let pt0 = layer.vector!.subpaths[0].points[0]
+        let spot = session.viewport.viewPoint(from: pt0.anchor.applying(layer.transform.layerToDocument), documentSize: session.document!.size)
+
+        let view = CanvasView(session: session)
+        view.frame = CGRect(x: 0, y: 0, width: 300, height: 300)
+
+        let event = NSEvent.mouseEvent(
+            with: .rightMouseDown,
+            location: view.convert(spot, to: nil),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )!
+
+        let menu = view.menu(for: event)
+        #expect(menu != nil)
+        #expect(menu?.items.contains { $0.title == "Deselect" } == true)
+        #expect(session.contextualHitTarget?.anchorIndex == VectorAnchorIndex(subpathIndex: 0, anchorIndex: 0))
+        #expect(session.vectorSelection?.selectedAnchors == [VectorAnchorIndex(subpathIndex: 0, anchorIndex: 0)])
+    }
+
+    // 74. Phase 2B-5: Right-click on already-selected anchor preserves multi-selection
+    @Test func rightClickOnAlreadySelectedAnchorPreservesMultiSelection() {
+        let session = makeSession()
+        let layerID = createTriangleLayer(in: session)
+        session.selectTool(.directSelection)
+
+        let a0 = VectorAnchorIndex(subpathIndex: 0, anchorIndex: 0)
+        let a1 = VectorAnchorIndex(subpathIndex: 0, anchorIndex: 1)
+        session.selectVectorAnchor(a0, in: layerID, toggle: false)
+        session.selectVectorAnchor(a1, in: layerID, toggle: true)
+        #expect(session.vectorSelection?.selectedAnchors.count == 2)
+
+        let layer = session.document!.layers.first(where: { $0.id == layerID })!
+        let pt0 = layer.vector!.subpaths[0].points[0]
+        let spot = session.viewport.viewPoint(from: pt0.anchor.applying(layer.transform.layerToDocument), documentSize: session.document!.size)
+
+        let view = CanvasView(session: session)
+        view.frame = CGRect(x: 0, y: 0, width: 300, height: 300)
+
+        let event = NSEvent.mouseEvent(
+            with: .rightMouseDown,
+            location: view.convert(spot, to: nil),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )!
+
+        let menu = view.menu(for: event)
+        #expect(menu != nil)
+        #expect(session.vectorSelection?.selectedAnchors == [a0, a1])
+        #expect(session.contextualHitTarget?.anchorIndex == a0)
+    }
+
+    // 75. Phase 2B-5: Right-click on selected handle resolves target and preserves anchor selection
+    @Test func rightClickOnSelectedHandleResolvesTargetAndPreservesAnchorSelection() {
+        let session = makeSession()
+        let layerID = createCurvedLayer(in: session)
+        session.selectTool(.directSelection)
+
+        let a0 = VectorAnchorIndex(subpathIndex: 0, anchorIndex: 0)
+        session.selectVectorAnchor(a0, in: layerID, toggle: false)
+
+        let layer = session.document!.layers.first(where: { $0.id == layerID })!
+        let nextDoc = layer.vector!.subpaths[0].points[0].nextControl!.applying(layer.transform.layerToDocument)
+        let spot = session.viewport.viewPoint(from: nextDoc, documentSize: session.document!.size)
+
+        let view = CanvasView(session: session)
+        view.frame = CGRect(x: 0, y: 0, width: 300, height: 300)
+
+        let event = NSEvent.mouseEvent(
+            with: .rightMouseDown,
+            location: view.convert(spot, to: nil),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )!
+
+        let menu = view.menu(for: event)
+        #expect(menu != nil)
+        #expect(session.contextualHitTarget?.kind == .handle(.next))
+        #expect(session.vectorSelection?.selectedAnchors.contains(a0) == true)
+        #expect(session.vectorSelection?.selectedHandle == SelectedHandle(anchorIndex: a0, side: .next))
+    }
+
+    // 76. Phase 2B-5: Right-click on empty canvas returns nil menu and does not fabricate target
+    @Test func rightClickOnEmptyCanvasReturnsNilMenuAndNoTarget() {
+        let session = makeSession()
+        let layerID = createTriangleLayer(in: session)
+        session.selectTool(.directSelection)
+
+        let a0 = VectorAnchorIndex(subpathIndex: 0, anchorIndex: 0)
+        session.selectVectorAnchor(a0, in: layerID, toggle: false)
+        let initialHistory = session.history.undoCount
+
+        let view = CanvasView(session: session)
+        view.frame = CGRect(x: 0, y: 0, width: 300, height: 300)
+
+        let emptySpot = CGPoint(x: 290, y: 290)
+        let event = NSEvent.mouseEvent(
+            with: .rightMouseDown,
+            location: view.convert(emptySpot, to: nil),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )!
+
+        let menu = view.menu(for: event)
+        #expect(menu == nil)
+        #expect(session.contextualHitTarget == nil)
+        // Existing selection preserved
+        #expect(session.vectorSelection?.selectedAnchors == [a0])
+        // No document history created
+        #expect(session.history.undoCount == initialHistory)
+    }
+
+    // 77. Phase 2B-5: Right-click on another vector layer switches active layer and selects anchor
+    @Test func rightClickOnAnotherVectorLayerSwitchesActiveLayerAndSelectsAnchor() {
+        let session = makeSession()
+        let layer1ID = createTriangleLayer(in: session)
+        let layer2ID = createCurvedLayer(in: session)
+        session.selectTool(.directSelection)
+
+        // Make layer 1 active initially
+        session.activeLayerID = layer1ID
+
+        let layer2 = session.document!.layers.first(where: { $0.id == layer2ID })!
+        let pt0 = layer2.vector!.subpaths[0].points[0]
+        let spot = session.viewport.viewPoint(from: pt0.anchor.applying(layer2.transform.layerToDocument), documentSize: session.document!.size)
+
+        let view = CanvasView(session: session)
+        view.frame = CGRect(x: 0, y: 0, width: 300, height: 300)
+
+        let event = NSEvent.mouseEvent(
+            with: .rightMouseDown,
+            location: view.convert(spot, to: nil),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )!
+
+        let menu = view.menu(for: event)
+        #expect(menu != nil)
+        #expect(session.activeLayerID == layer2ID)
+        #expect(session.contextualHitTarget?.layerID == layer2ID)
+        #expect(session.vectorSelection?.layerID == layer2ID)
+    }
+
+    // 78. Phase 2B-5: Contextual target clears on deselect and cancel
+    @Test func contextualTargetClearsOnDeselectAndCancel() {
+        let session = makeSession()
+        let layerID = createTriangleLayer(in: session)
+        session.selectTool(.directSelection)
+
+        let layer = session.document!.layers.first(where: { $0.id == layerID })!
+        let pt0 = layer.vector!.subpaths[0].points[0]
+        let spot = session.viewport.viewPoint(from: pt0.anchor.applying(layer.transform.layerToDocument), documentSize: session.document!.size)
+
+        // Resolve contextual target
+        session.resolveDirectSelectionContextualTarget(at: spot)
+        #expect(session.contextualHitTarget != nil)
+
+        // Deselect clears it
+        session.deselectVectorAnchors()
+        #expect(session.contextualHitTarget == nil)
+
+        // Resolve again
+        session.resolveDirectSelectionContextualTarget(at: spot)
+        #expect(session.contextualHitTarget != nil)
+
+        // Cancel clears it
+        session.cancelDirectSelection()
+        #expect(session.contextualHitTarget == nil)
+    }
+
+    // 79. Phase 2B-5: Control+click routes to secondary-click and resolves contextual target
+    @Test func controlClickRoutesToSecondaryClickAndResolvesContextualTarget() {
+        let session = makeSession()
+        let layerID = createTriangleLayer(in: session)
+        session.selectTool(.directSelection)
+
+        let layer = session.document!.layers.first(where: { $0.id == layerID })!
+        let pt0 = layer.vector!.subpaths[0].points[0]
+        let spot = session.viewport.viewPoint(from: pt0.anchor.applying(layer.transform.layerToDocument), documentSize: session.document!.size)
+
+        let view = CanvasView(session: session)
+        view.frame = CGRect(x: 0, y: 0, width: 300, height: 300)
+
+        // LeftMouseDown with .control modifier
+        let event = NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: view.convert(spot, to: nil),
+            modifierFlags: [.control],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )!
+
+        let menu = view.menu(for: event)
+        #expect(menu != nil)
+        #expect(session.contextualHitTarget?.anchorIndex == VectorAnchorIndex(subpathIndex: 0, anchorIndex: 0))
+        #expect(session.vectorSelection?.selectedAnchors == [VectorAnchorIndex(subpathIndex: 0, anchorIndex: 0)])
+    }
+
+    // 80. Phase 2B-5: Mouse move updates hover target and mouse exit clears it
+    @Test func mouseMoveUpdatesHoverTargetAndMouseExitClearsIt() {
+        let session = makeSession()
+        let layerID = createTriangleLayer(in: session)
+        session.selectTool(.directSelection)
+
+        let layer = session.document!.layers.first(where: { $0.id == layerID })!
+        let pt0 = layer.vector!.subpaths[0].points[0]
+        let spot = session.viewport.viewPoint(from: pt0.anchor.applying(layer.transform.layerToDocument), documentSize: session.document!.size)
+
+        let view = CanvasView(session: session)
+        view.frame = CGRect(x: 0, y: 0, width: 300, height: 300)
+
+        let moveEvent = NSEvent.mouseEvent(
+            with: .mouseMoved,
+            location: view.convert(spot, to: nil),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 0,
+            pressure: 0
+        )!
+
+        view.mouseMoved(with: moveEvent)
+        #expect(session.directSelectionHoverTarget?.anchorIndex == VectorAnchorIndex(subpathIndex: 0, anchorIndex: 0))
+
+        let exitEvent = NSEvent.enterExitEvent(
+            with: .mouseExited,
+            location: view.convert(NSPoint(x: -10, y: -10), to: nil),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            trackingNumber: 0,
+            userData: nil
+        )!
+
+        view.mouseExited(with: exitEvent)
+        #expect(session.directSelectionHoverTarget == nil)
     }
 }

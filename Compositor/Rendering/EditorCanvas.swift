@@ -214,6 +214,51 @@ final class CanvasView: NSView {
     /// Pointing hand with a dashed box: Cmd-click a mask thumbnail to load it as a selection.
     static let loadSelectionCursor = selectionBadged(.pointingHand, boxAt: CGPoint(x: 11.5, y: 14.5))
 
+    /// The base Direct Selection pointer (white arrow).
+    static let directSelectionCursor: NSCursor = distortCursor
+
+    /// Direct Selection cursor when hovering over an anchor point (white arrow badged with square).
+    static let directSelectionAnchorCursor: NSCursor = {
+        let base = distortCursor
+        let image = NSImage(size: NSSize(width: 36, height: 36), flipped: true) { _ in
+            base.image.draw(in: NSRect(origin: .zero, size: base.image.size), from: .zero, operation: .sourceOver,
+                            fraction: 1, respectFlipped: true, hints: nil)
+            let box = NSRect(x: base.hotSpot.x + 10, y: base.hotSpot.y + 12, width: 6, height: 6)
+            NSColor.white.setStroke()
+            let bgPath = NSBezierPath(rect: box)
+            bgPath.lineWidth = 2.5
+            bgPath.stroke()
+            NSColor.controlAccentColor.setFill()
+            bgPath.fill()
+            NSColor.black.setStroke()
+            bgPath.lineWidth = 1
+            bgPath.stroke()
+            return true
+        }
+        return NSCursor(image: image, hotSpot: base.hotSpot)
+    }()
+
+    /// Direct Selection cursor when hovering over a control handle (white arrow badged with circle).
+    static let directSelectionHandleCursor: NSCursor = {
+        let base = distortCursor
+        let image = NSImage(size: NSSize(width: 36, height: 36), flipped: true) { _ in
+            base.image.draw(in: NSRect(origin: .zero, size: base.image.size), from: .zero, operation: .sourceOver,
+                            fraction: 1, respectFlipped: true, hints: nil)
+            let circle = NSRect(x: base.hotSpot.x + 10, y: base.hotSpot.y + 12, width: 6, height: 6)
+            NSColor.white.setStroke()
+            let bgPath = NSBezierPath(ovalIn: circle)
+            bgPath.lineWidth = 2.5
+            bgPath.stroke()
+            NSColor.controlAccentColor.setFill()
+            bgPath.fill()
+            NSColor.black.setStroke()
+            bgPath.lineWidth = 1
+            bgPath.stroke()
+            return true
+        }
+        return NSCursor(image: image, hotSpot: base.hotSpot)
+    }()
+
     /// Adds a small dashed selection box to a system cursor, offset from its hot spot.
     static func selectionBadged(_ base: NSCursor, boxAt offset: CGPoint) -> NSCursor {
         let image = NSImage(size: NSSize(width: 36, height: 36), flipped: true) { _ in
@@ -1241,6 +1286,10 @@ final class CanvasView: NSView {
         session.filterEdit?.cameraRawReadout = nil
         brushPointer = nil
         updateBrushCursor()
+        if session.tool == .directSelection {
+            session.clearDirectSelectionHover()
+            synchronizeDisplay()
+        }
         // Tools set their cursor directly while over the canvas, so put the arrow back on the
         // way out. A drag keeps its cursor until mouse-up.
         if NSEvent.pressedMouseButtons == 0 { NSCursor.arrow.set() }
@@ -1269,6 +1318,13 @@ final class CanvasView: NSView {
             synchronizeDisplay()
             return
         }
+        if session.tool == .directSelection {
+            let point = convert(event.locationInWindow, from: nil)
+            let hover = session.updateDirectSelectionHover(at: point)
+            synchronizeDisplay()
+            updateDirectSelectionCursor(hover: hover)
+            return
+        }
         brushPointer = convert(event.locationInWindow, from: nil)
         updateBrushCursor()
         if session.tool == .move { updateTransformCursor(at: convert(event.locationInWindow, from: nil), flags: event.modifierFlags) }
@@ -1277,10 +1333,27 @@ final class CanvasView: NSView {
     override func cursorUpdate(with event: NSEvent) {
         if picking { Self.eyedropperCursor.set() }
         else if session.tool.isSelectionTool, !spaceHeld { lassoCursor.set() }
+        else if session.tool == .directSelection {
+            updateDirectSelectionCursor(hover: session.directSelectionHoverTarget)
+        }
         // Cursor-update events carry no modifier flags (AppKit sends one after every key change), so read
         // the keys as they are now; the event's flags would undo Option's duplicate cursor straight away.
         else if session.tool == .move { updateTransformCursor(at: convert(event.locationInWindow, from: nil), flags: NSEvent.modifierFlags) }
         else { super.cursorUpdate(with: event) }
+    }
+    private func updateDirectSelectionCursor(hover: DirectSelectionHitTarget?) {
+        guard !spaceHeld else { NSCursor.openHand.set(); return }
+        guard !session.isProjectBusy, !session.isImporting else { NSCursor.arrow.set(); return }
+        if let hover {
+            switch hover.kind {
+            case .anchor:
+                Self.directSelectionAnchorCursor.set()
+            case .handle:
+                Self.directSelectionHandleCursor.set()
+            }
+        } else {
+            Self.directSelectionCursor.set()
+        }
     }
     private func updateTransformCursor(at point: CGPoint, flags: NSEvent.ModifierFlags = NSEvent.modifierFlags) {
         transformCursor(at: point, flags: flags).set()
@@ -1364,7 +1437,7 @@ final class CanvasView: NSView {
     }
 
     private func vectorContextMenu(for target: DirectSelectionHitTarget?) -> NSMenu? {
-        guard target != nil || session.vectorSelection != nil else { return nil }
+        guard let target else { return nil }
         let menu = NSMenu()
         let deselectItem = NSMenuItem(title: "Deselect", action: #selector(deselectVectorSelection(_:)), keyEquivalent: "")
         deselectItem.target = self
@@ -1414,6 +1487,10 @@ final class CanvasView: NSView {
         updateBrushCursor()
     }
     override func mouseDown(with event: NSEvent) {
+        if session.tool == .directSelection, event.modifierFlags.contains(.control) {
+            rightMouseDown(with: event)
+            return
+        }
         session.effectSelection = nil
         optionHeld = event.modifierFlags.contains(.option)
         window?.makeFirstResponder(self)

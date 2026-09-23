@@ -253,6 +253,8 @@ final class EditorSession {
     var directSelectionDrag: DirectSelectionDrag?
     /// Transient hit target from the most recent Direct Selection secondary click / contextual menu.
     var contextualHitTarget: DirectSelectionHitTarget?
+    /// Transient hit target from mouse hover over vector anchors or handles in Direct Selection.
+    var directSelectionHoverTarget: DirectSelectionHitTarget?
     var selectionModeChoice = SelectionMode.replace
     /// Mode implied by the Shift/Option keys currently held, nil when neither is.
     var heldSelectionMode: SelectionMode?
