@@ -385,4 +385,215 @@ struct PenToolTests {
         session.clearProject()
         #expect(session.penDraft == nil)
     }
+
+    @Test func penDraftUndoRemovesLastAnchorAcrossThreeTwoOneSequence() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 30, y: 30))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 60))
+        session.endPenDrag()
+
+        guard let draft3 = session.penDraft else {
+            Issue.record("penDraft expected")
+            return
+        }
+        #expect(draft3.subpath.points.count == 3)
+        #expect(session.canUndo)
+
+        // 1. Undo third anchor -> 2 anchors remain
+        session.undo()
+        guard let draft2 = session.penDraft else {
+            Issue.record("penDraft expected with 2 points")
+            return
+        }
+        #expect(draft2.subpath.points.count == 2)
+        #expect(draft2.activeAnchorIndex == 1)
+        #expect(draft2.subpath.points[0].anchor == CGPoint(x: 10, y: 10))
+        #expect(draft2.subpath.points[1].anchor == CGPoint(x: 30, y: 30))
+        #expect(session.tool == .pen)
+
+        // 2. Undo second anchor -> 1 anchor remains
+        session.undo()
+        guard let draft1 = session.penDraft else {
+            Issue.record("penDraft expected with 1 point")
+            return
+        }
+        #expect(draft1.subpath.points.count == 1)
+        #expect(draft1.activeAnchorIndex == 0)
+        #expect(draft1.subpath.points[0].anchor == CGPoint(x: 10, y: 10))
+        #expect(session.tool == .pen)
+
+        // 3. Undo first anchor -> cancels draft
+        session.undo()
+        #expect(session.penDraft == nil)
+        #expect(session.tool == .pen)
+    }
+
+    @Test func penDraftUndoDoesNotMutateOrConsumeDocumentHistory() {
+        let session = makeSession()
+        session.addBlankLayer()
+        let initialUndoCount = session.history.undoCount
+        let initialDoc = session.document
+
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 30, y: 30))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 60))
+        session.endPenDrag()
+
+        // 3 anchors active
+        session.undo()
+        #expect(session.history.undoCount == initialUndoCount)
+        #expect(session.document == initialDoc)
+
+        session.undo()
+        #expect(session.history.undoCount == initialUndoCount)
+        #expect(session.document == initialDoc)
+
+        session.undo()
+        #expect(session.history.undoCount == initialUndoCount)
+        #expect(session.document == initialDoc)
+        #expect(session.penDraft == nil)
+
+        // With penDraft canceled, the next Undo operates on committed document history
+        session.undo()
+        #expect(session.history.undoCount == initialUndoCount - 1)
+    }
+
+    @Test func cmdShiftZRedoDuringPenDraftIsNoOp() {
+        let session = makeSession()
+        session.addBlankLayer()
+        session.addBlankLayer()
+        session.undo()
+        #expect(session.canRedo)
+        let redoName = session.history.redoName
+
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 50, y: 50))
+        session.endPenDrag()
+
+        #expect(session.penDraft != nil)
+        #expect(!session.canRedo)
+
+        let layerCount = session.document?.layers.count ?? 0
+        session.redo()
+
+        // Redo was a no-op: document history was not redone
+        #expect(session.document?.layers.count == layerCount)
+        #expect(session.penDraft != nil)
+        #expect(session.penDraft?.subpath.points.count == 2)
+
+        // Cancel pen draft
+        session.cancelPen()
+        #expect(session.canRedo)
+        #expect(session.history.redoName == redoName)
+        session.redo()
+        #expect(session.document?.layers.count == layerCount + 1)
+    }
+
+    @Test func canContinueDrawingAfterUndoingAnAnchor() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 30, y: 30))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 50, y: 50))
+        session.endPenDrag()
+
+        // Undo 3rd anchor
+        session.undo()
+        #expect(session.penDraft?.subpath.points.count == 2)
+
+        // Continue drawing: add a new 3rd anchor at (70, 70)
+        session.beginPen(at: CGPoint(x: 70, y: 70))
+        session.endPenDrag()
+        #expect(session.penDraft?.subpath.points.count == 3)
+        #expect(session.penDraft?.subpath.points[2].anchor == CGPoint(x: 70, y: 70))
+
+        // Finish pen path
+        session.finishPen()
+        #expect(session.penDraft == nil)
+
+        guard let layer = session.activeLayer, let vector = layer.vector else {
+            Issue.record("Layer with vector expected")
+            return
+        }
+        #expect(vector.subpaths[0].points.count == 3)
+    }
+
+    @Test func afterPenCommitNormalUndoRedoResumes() {
+        let session = makeSession()
+        let initialLayers = session.document?.layers.count ?? 0
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 40, y: 40))
+        session.endPenDrag()
+        session.finishPen()
+
+        #expect(session.penDraft == nil)
+        #expect((session.document?.layers.count ?? 0) == initialLayers + 1)
+
+        // Undo committed vector layer
+        session.undo()
+        #expect((session.document?.layers.count ?? 0) == initialLayers)
+
+        // Redo committed vector layer
+        session.redo()
+        #expect((session.document?.layers.count ?? 0) == initialLayers + 1)
+        #expect(session.activeLayer?.vector != nil)
+    }
+
+    @Test func historyIsolationBetweenCommittedVectorsAndPenDraft() {
+        let session = makeSession()
+
+        // Commit Vector A
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.finishPen()
+        guard let vectorAID = session.activeLayerID else { Issue.record("Vector A ID"); return }
+
+        // Commit Vector B
+        session.beginPen(at: CGPoint(x: 30, y: 30))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 40, y: 40))
+        session.endPenDrag()
+        session.finishPen()
+        guard let vectorBID = session.activeLayerID else { Issue.record("Vector B ID"); return }
+
+        // Begin third Pen draft with 3 anchors
+        session.beginPen(at: CGPoint(x: 50, y: 50))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 60))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 70, y: 70))
+        session.endPenDrag()
+
+        // 3 Undos must only affect the third draft
+        session.undo()
+        session.undo()
+        session.undo()
+        #expect(session.penDraft == nil)
+
+        // Both Vector A and Vector B are preserved
+        let layerIDs = session.document?.layers.map(\.id) ?? []
+        #expect(layerIDs.contains(vectorAID))
+        #expect(layerIDs.contains(vectorBID))
+
+        // Next Undo removes Vector B
+        session.undo()
+        let layerIDsAfterUndoB = session.document?.layers.map(\.id) ?? []
+        #expect(layerIDsAfterUndoB.contains(vectorAID))
+        #expect(!layerIDsAfterUndoB.contains(vectorBID))
+
+        // Next Undo removes Vector A
+        session.undo()
+        let layerIDsAfterUndoA = session.document?.layers.map(\.id) ?? []
+        #expect(!layerIDsAfterUndoA.contains(vectorAID))
+    }
 }

@@ -327,7 +327,7 @@ extension EditorSession {
     }
 
     /// Selects or toggles an anchor in the given layer.
-    func selectVectorAnchor(_ anchor: VectorAnchorIndex, in layerID: UUID, toggle: Bool) {
+    func selectVectorAnchor(_ anchor: VectorAnchorIndex, in layerID: UUID, toggle: Bool = false) {
         if activeLayerID != layerID {
             activeLayerID = layerID
         }
@@ -580,6 +580,115 @@ extension EditorSession {
         cancelDirectSelectionDrag()
         vectorSelection = nil
         contextualHitTarget = nil
+    }
+
+    /// Deletes the currently selected vector anchors in Direct Selection mode as a single history transaction.
+    func deleteSelectedVectorAnchors() {
+        guard tool == .directSelection,
+              canEditLayers,
+              let selection = vectorSelection,
+              !selection.selectedAnchors.isEmpty else { return }
+        deleteVectorAnchors(selection.selectedAnchors, in: selection.layerID)
+    }
+
+    /// Deletes the specified vector anchors from the indicated vector layer as a single history transaction.
+    func deleteVectorAnchors(_ toDelete: Set<VectorAnchorIndex>, in layerID: UUID) {
+        guard canEditLayers,
+              !toDelete.isEmpty,
+              let index = document?.layers.firstIndex(where: { $0.id == layerID }),
+              let initialModel = document?.layers[index].vector else { return }
+
+        // 1. Group anchor indices to delete by subpathIndex
+        var anchorsBySubpath: [Int: Set<Int>] = [:]
+        for idx in toDelete {
+            anchorsBySubpath[idx.subpathIndex, default: []].insert(idx.anchorIndex)
+        }
+
+        // 2. Perform deletion on each subpath
+        var newSubpaths: [VectorSubpath] = []
+        var emptySubpathsBefore = [Int](repeating: 0, count: initialModel.subpaths.count)
+        var cumulativeEmpty = 0
+
+        for (subpathIdx, subpath) in initialModel.subpaths.enumerated() {
+            emptySubpathsBefore[subpathIdx] = cumulativeEmpty
+            var pts = subpath.points
+            if let toDeleteInSubpath = anchorsBySubpath[subpathIdx] {
+                let sortedIndices = toDeleteInSubpath.sorted(by: >)
+                for aIdx in sortedIndices {
+                    if pts.indices.contains(aIdx) {
+                        pts.remove(at: aIdx)
+                    }
+                }
+            }
+
+            if pts.isEmpty {
+                // Subpath becomes empty -> Remove the empty subpath (Step 7)
+                cumulativeEmpty += 1
+            } else {
+                var updatedSubpath = subpath
+                updatedSubpath.points = pts
+                if pts.count < 2 {
+                    updatedSubpath.isClosed = false
+                }
+                newSubpaths.append(updatedSubpath)
+            }
+        }
+
+        var newModel = initialModel
+        newModel.subpaths = newSubpaths
+
+        // 3. Record history transaction and apply mutation
+        let actionName = toDelete.count == 1 ? "Delete Vector Anchor" : "Delete Vector Anchors"
+        beginEdit(actionName)
+        document?.layers[index].vector = newModel
+        redrawVector(at: index)
+        endEdit()
+
+        // 4. Update selection state and clean up handles
+        if var sel = vectorSelection, sel.layerID == layerID {
+            var remappedAnchors = Set<VectorAnchorIndex>()
+            for anchorIdx in sel.selectedAnchors where !toDelete.contains(anchorIdx) {
+                let s = anchorIdx.subpathIndex
+                let a = anchorIdx.anchorIndex
+                guard s < initialModel.subpaths.count else { continue }
+                let deletedBeforeInSubpath = anchorsBySubpath[s]?.filter({ $0 < a }).count ?? 0
+                let newS = s - emptySubpathsBefore[s]
+                let newA = a - deletedBeforeInSubpath
+                remappedAnchors.insert(VectorAnchorIndex(subpathIndex: newS, anchorIndex: newA))
+            }
+
+            var remappedHandle: SelectedHandle? = nil
+            if let handle = sel.selectedHandle, !toDelete.contains(handle.anchorIndex) {
+                let s = handle.anchorIndex.subpathIndex
+                let a = handle.anchorIndex.anchorIndex
+                if s < initialModel.subpaths.count {
+                    let deletedBeforeInSubpath = anchorsBySubpath[s]?.filter({ $0 < a }).count ?? 0
+                    let newS = s - emptySubpathsBefore[s]
+                    let newA = a - deletedBeforeInSubpath
+                    remappedHandle = SelectedHandle(
+                        anchorIndex: VectorAnchorIndex(subpathIndex: newS, anchorIndex: newA),
+                        side: handle.side
+                    )
+                }
+            }
+
+            if remappedAnchors.isEmpty {
+                vectorSelection = nil
+            } else {
+                vectorSelection = VectorSelection(
+                    layerID: layerID,
+                    selectedAnchors: remappedAnchors,
+                    selectedHandle: remappedHandle
+                )
+            }
+        }
+
+        // 5. Clean up contextual hit target if it targeted a deleted anchor/handle
+        if let target = contextualHitTarget, target.layerID == layerID {
+            if toDelete.contains(target.anchorIndex) {
+                contextualHitTarget = nil
+            }
+        }
     }
 
     /// Re-renders the raster asset and thumbnail for the vector layer at the specified index.

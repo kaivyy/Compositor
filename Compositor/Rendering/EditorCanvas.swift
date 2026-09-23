@@ -1886,6 +1886,7 @@ final class CanvasView: NSView {
         } else if (event.keyCode == 51 || event.keyCode == 117),
            event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
             session.deleteKeyPressed()
+            synchronizeDisplay()
         } else if event.keyCode == 48, session.textDraft == nil, event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty {
             // Tab switches the current tool's mode (Rectangle/Ellipse, Paint/Erase, and so on).
             session.cycleToolMode()

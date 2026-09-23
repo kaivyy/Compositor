@@ -106,6 +106,21 @@ extension EditorSession {
         }
     }
 
+    /// Undoes the last anchor in the active Pen draft, or cancels the draft if 1 or 0 anchors remain.
+    /// Operates purely on transient state without modifying or consuming DocumentHistory.
+    func undoPenDraft() {
+        guard var draft = penDraft else { return }
+
+        if draft.subpath.points.count <= 1 {
+            penDraft = nil
+        } else {
+            draft.subpath.points.removeLast()
+            draft.activeAnchorIndex = draft.subpath.points.count - 1
+            draft.isDragging = false
+            penDraft = draft
+        }
+    }
+
     /// Commits a completed VectorSubpath into a new ImageLayer with canonical VectorModel and derived raster cache.
     func commitPen(subpath: VectorSubpath) {
         guard canEditLayers, document != nil, subpath.isValid, !subpath.points.isEmpty else { return }

@@ -1607,7 +1607,7 @@ struct DirectSelectionTests {
         #expect(session.history.undoName == "Transform Layer")
     }
 
-    // 59. Uncommitted pen interaction undo audit: proves that Cmd+Z during active drafting undos prior document history
+    // 59. Corrected pen interaction undo behavior: Cmd+Z during active drafting undos transient draft, NOT prior document history
     @Test func uncommittedPenInteractionUndoBehavior() {
         let session = makeSession()
         session.history.reset()
@@ -1625,15 +1625,323 @@ struct DirectSelectionTests {
         #expect(session.penDraft != nil)
         #expect(session.penDraft?.subpath.points.count == 2)
         #expect(session.canUndo == true)
-        #expect(session.history.undoName == "New Blank Layer")
 
         // When Cmd+Z is triggered while penDraft is active:
         session.undo()
 
-        // DocumentHistory popped "New Blank Layer" (prior layer operation)
-        #expect(session.history.undoCount == 0)
-        // While penDraft was NOT undone and remains on screen
+        // Prior layer operation is NOT popped
+        #expect(session.history.undoCount == 1)
+        #expect(session.history.undoName == "New Blank Layer")
+        // penDraft removes the last anchor
         #expect(session.penDraft != nil)
-        #expect(session.penDraft?.subpath.points.count == 2)
+        #expect(session.penDraft?.subpath.points.count == 1)
+    }
+
+    private func sessionWithVectorLayer() -> (EditorSession, UUID) {
+        let session = makeSession()
+        let p0 = VectorPoint(anchor: CGPoint(x: 20, y: 20))
+        let p1 = VectorPoint(anchor: CGPoint(x: 60, y: 80))
+        let p2 = VectorPoint(anchor: CGPoint(x: 100, y: 30))
+        let model = VectorModel(subpaths: [VectorSubpath(points: [p0, p1, p2])],
+                                stroke: VectorStrokeStyle(color: .black, width: 2))
+        let image = try! VectorRenderer.render(model, in: CGSize(width: 120, height: 100))
+        session.addPixelLayer(image, at: .zero, name: "Vector", editName: "Add Vector", vector: model)
+        return (session, session.activeLayerID!)
+    }
+
+    // 60. Delete one selected anchor
+    @Test func deleteOneSelectedAnchor() {
+        let (session, layerID) = sessionWithVectorLayer()
+        session.selectTool(.directSelection)
+
+        let anchor1 = VectorAnchorIndex(subpathIndex: 0, anchorIndex: 1)
+        session.selectVectorAnchor(anchor1, in: layerID)
+
+        let initialLayers = session.document?.layers.count ?? 0
+        let initialUndoCount = session.history.undoCount
+
+        session.deleteSelectedVectorAnchors()
+
+        guard let layer = session.document?.layers.first(where: { $0.id == layerID }),
+              let vector = layer.vector else {
+            Issue.record("Vector layer expected")
+            return
+        }
+
+        // Layer is preserved
+        #expect(session.document?.layers.count == initialLayers)
+        // Anchor 1 deleted, 2 anchors remain (points at 0 and 2 from original)
+        #expect(vector.subpaths[0].points.count == 2)
+        #expect(vector.subpaths[0].points[0].anchor == CGPoint(x: 20, y: 20))
+        #expect(vector.subpaths[0].points[1].anchor == CGPoint(x: 100, y: 30))
+
+        // Selection is cleared
+        #expect(session.vectorSelection == nil)
+
+        // Exactly one history transaction
+        #expect(session.history.undoCount == initialUndoCount + 1)
+        #expect(session.history.undoName == "Delete Vector Anchor")
+    }
+
+    // 61. Delete multiple selected anchors
+    @Test func deleteMultipleSelectedAnchors() {
+        let session = makeSession()
+        let p0 = VectorPoint(anchor: CGPoint(x: 10, y: 10))
+        let p1 = VectorPoint(anchor: CGPoint(x: 30, y: 30))
+        let p2 = VectorPoint(anchor: CGPoint(x: 50, y: 50))
+        let p3 = VectorPoint(anchor: CGPoint(x: 70, y: 70))
+        let p4 = VectorPoint(anchor: CGPoint(x: 90, y: 90))
+        let model = VectorModel(subpaths: [VectorSubpath(points: [p0, p1, p2, p3, p4])],
+                                stroke: VectorStrokeStyle(color: .black, width: 2))
+
+        let image = try! VectorRenderer.render(model, in: CGSize(width: 100, height: 100))
+        session.addPixelLayer(image, at: .zero, name: "Vector 5", editName: "Add Vector", vector: model)
+        let layerID = session.activeLayerID!
+
+        session.selectTool(.directSelection)
+        let a1 = VectorAnchorIndex(subpathIndex: 0, anchorIndex: 1)
+        let a3 = VectorAnchorIndex(subpathIndex: 0, anchorIndex: 3)
+        session.selectVectorAnchor(a1, in: layerID)
+        session.selectVectorAnchor(a3, in: layerID, toggle: true)
+
+        #expect(session.vectorSelection?.selectedAnchors.count == 2)
+
+        let initialUndo = session.history.undoCount
+        session.deleteSelectedVectorAnchors()
+
+        guard let layer = session.document?.layers.first(where: { $0.id == layerID }),
+              let vector = layer.vector else {
+            Issue.record("Vector layer expected")
+            return
+        }
+
+        // Anchors 1 and 3 deleted; 0, 2, 4 remain (3 points total)
+        #expect(vector.subpaths[0].points.count == 3)
+        #expect(vector.subpaths[0].points[0].anchor == CGPoint(x: 10, y: 10))
+        #expect(vector.subpaths[0].points[1].anchor == CGPoint(x: 50, y: 50))
+        #expect(vector.subpaths[0].points[2].anchor == CGPoint(x: 90, y: 90))
+
+        #expect(session.vectorSelection == nil)
+        #expect(session.history.undoCount == initialUndo + 1)
+        #expect(session.history.undoName == "Delete Vector Anchors")
+    }
+
+    // 62. Delete preserves neighboring anchor geometry and handles
+    @Test func deletePreservesNeighboringAnchorGeometryAndHandles() {
+        let session = makeSession()
+        let p0 = VectorPoint(anchor: CGPoint(x: 10, y: 10), previousControl: nil, nextControl: CGPoint(x: 20, y: 10))
+        let p1 = VectorPoint(anchor: CGPoint(x: 50, y: 50), previousControl: CGPoint(x: 40, y: 50), nextControl: CGPoint(x: 60, y: 50))
+        let p2 = VectorPoint(anchor: CGPoint(x: 90, y: 90), previousControl: CGPoint(x: 80, y: 90), nextControl: nil)
+        let model = VectorModel(subpaths: [VectorSubpath(points: [p0, p1, p2])],
+                                stroke: VectorStrokeStyle(color: .black, width: 2))
+
+        let image = try! VectorRenderer.render(model, in: CGSize(width: 100, height: 100))
+        session.addPixelLayer(image, at: .zero, name: "Curved", editName: "Add Vector", vector: model)
+        let layerID = session.activeLayerID!
+
+        session.selectTool(.directSelection)
+        let a1 = VectorAnchorIndex(subpathIndex: 0, anchorIndex: 1)
+        session.selectVectorAnchor(a1, in: layerID)
+
+        session.deleteSelectedVectorAnchors()
+
+        guard let layer = session.document?.layers.first(where: { $0.id == layerID }),
+              let vector = layer.vector else {
+            Issue.record("Vector expected")
+            return
+        }
+
+        #expect(vector.subpaths[0].points.count == 2)
+        // Neighboring anchors retain exact coordinates and handles
+        #expect(vector.subpaths[0].points[0].anchor == CGPoint(x: 10, y: 10))
+        #expect(vector.subpaths[0].points[0].nextControl == CGPoint(x: 20, y: 10))
+        #expect(vector.subpaths[0].points[1].anchor == CGPoint(x: 90, y: 90))
+        #expect(vector.subpaths[0].points[1].previousControl == CGPoint(x: 80, y: 90))
+    }
+
+    // 63. Delete clears selected handle belonging to deleted anchor
+    @Test func deleteClearsSelectedHandleBelongingToDeletedAnchor() {
+        let (session, layerID) = sessionWithVectorLayer()
+        session.selectTool(.directSelection)
+
+        let a1 = VectorAnchorIndex(subpathIndex: 0, anchorIndex: 1)
+        session.selectVectorHandle(SelectedHandle(anchorIndex: a1, side: .next), in: layerID)
+
+        #expect(session.vectorSelection?.selectedHandle != nil)
+        #expect(session.vectorSelection?.selectedHandle?.anchorIndex == a1)
+
+        session.deleteSelectedVectorAnchors()
+
+        #expect(session.vectorSelection == nil)
+    }
+
+    // 64. Delete preserves unrelated subpaths
+    @Test func deletePreservesUnrelatedSubpaths() {
+        let session = makeSession()
+        let sp0 = VectorSubpath(points: [
+            VectorPoint(anchor: CGPoint(x: 10, y: 10)),
+            VectorPoint(anchor: CGPoint(x: 20, y: 20)),
+            VectorPoint(anchor: CGPoint(x: 30, y: 30))
+        ])
+        let sp1 = VectorSubpath(points: [
+            VectorPoint(anchor: CGPoint(x: 50, y: 50)),
+            VectorPoint(anchor: CGPoint(x: 60, y: 60)),
+            VectorPoint(anchor: CGPoint(x: 70, y: 70))
+        ])
+        let model = VectorModel(subpaths: [sp0, sp1], stroke: VectorStrokeStyle(color: .black, width: 2))
+        let image = try! VectorRenderer.render(model, in: CGSize(width: 100, height: 100))
+        session.addPixelLayer(image, at: .zero, name: "MultiSubpath", editName: "Add Vector", vector: model)
+        let layerID = session.activeLayerID!
+
+        session.selectTool(.directSelection)
+        let a1Sp0 = VectorAnchorIndex(subpathIndex: 0, anchorIndex: 1)
+        session.selectVectorAnchor(a1Sp0, in: layerID)
+
+        session.deleteSelectedVectorAnchors()
+
+        guard let layer = session.document?.layers.first(where: { $0.id == layerID }),
+              let vector = layer.vector else {
+            Issue.record("Vector expected")
+            return
+        }
+
+        #expect(vector.subpaths.count == 2)
+        #expect(vector.subpaths[0].points.count == 2)
+        // Subpath 1 is completely untouched
+        #expect(vector.subpaths[1] == sp1)
+    }
+
+    // 65. Empty subpath cleanup follows model invariant
+    @Test func emptySubpathCleanupFollowsModelInvariant() {
+        let session = makeSession()
+        let sp0 = VectorSubpath(points: [
+            VectorPoint(anchor: CGPoint(x: 10, y: 10)),
+            VectorPoint(anchor: CGPoint(x: 20, y: 20))
+        ])
+        let sp1 = VectorSubpath(points: [
+            VectorPoint(anchor: CGPoint(x: 50, y: 50)),
+            VectorPoint(anchor: CGPoint(x: 60, y: 60))
+        ])
+        let model = VectorModel(subpaths: [sp0, sp1], stroke: VectorStrokeStyle(color: .black, width: 2))
+        let image = try! VectorRenderer.render(model, in: CGSize(width: 100, height: 100))
+        session.addPixelLayer(image, at: .zero, name: "TwoSubpaths", editName: "Add Vector", vector: model)
+        let layerID = session.activeLayerID!
+
+        session.selectTool(.directSelection)
+        // Select both anchors in Subpath 0
+        session.selectVectorAnchor(VectorAnchorIndex(subpathIndex: 0, anchorIndex: 0), in: layerID)
+        session.selectVectorAnchor(VectorAnchorIndex(subpathIndex: 0, anchorIndex: 1), in: layerID, toggle: true)
+
+        session.deleteSelectedVectorAnchors()
+
+        guard let layer = session.document?.layers.first(where: { $0.id == layerID }),
+              let vector = layer.vector else {
+            Issue.record("Vector expected")
+            return
+        }
+
+        // Subpath 0 became empty and was removed; only original Subpath 1 remains
+        #expect(vector.subpaths.count == 1)
+        #expect(vector.subpaths[0] == sp1)
+    }
+
+    // 66. Subpath with 1 anchor left is preserved
+    @Test func singleAnchorSubpathPreserved() {
+        let session = makeSession()
+        let p0 = VectorPoint(anchor: CGPoint(x: 15, y: 15))
+        let p1 = VectorPoint(anchor: CGPoint(x: 35, y: 35))
+        let model = VectorModel(subpaths: [VectorSubpath(points: [p0, p1])],
+                                stroke: VectorStrokeStyle(color: .black, width: 2))
+        let image = try! VectorRenderer.render(model, in: CGSize(width: 100, height: 100))
+        session.addPixelLayer(image, at: .zero, name: "TwoPoints", editName: "Add Vector", vector: model)
+        let layerID = session.activeLayerID!
+
+        session.selectTool(.directSelection)
+        session.selectVectorAnchor(VectorAnchorIndex(subpathIndex: 0, anchorIndex: 1), in: layerID)
+
+        session.deleteSelectedVectorAnchors()
+
+        guard let layer = session.document?.layers.first(where: { $0.id == layerID }),
+              let vector = layer.vector else {
+            Issue.record("Vector expected")
+            return
+        }
+
+        #expect(vector.subpaths.count == 1)
+        #expect(vector.subpaths[0].points.count == 1)
+        #expect(vector.subpaths[0].points[0] == p0)
+        #expect(vector.isValid)
+    }
+
+    // 67. Entire vector model becomes empty does not delete layer
+    @Test func entireVectorModelBecomesEmptyDoesNotDeleteLayer() {
+        let (session, layerID) = sessionWithVectorLayer()
+        session.selectTool(.directSelection)
+
+        // Select all 3 anchors
+        session.selectVectorAnchor(VectorAnchorIndex(subpathIndex: 0, anchorIndex: 0), in: layerID)
+        session.selectVectorAnchor(VectorAnchorIndex(subpathIndex: 0, anchorIndex: 1), in: layerID, toggle: true)
+        session.selectVectorAnchor(VectorAnchorIndex(subpathIndex: 0, anchorIndex: 2), in: layerID, toggle: true)
+
+        let initialLayers = session.document?.layers.count ?? 0
+        session.deleteSelectedVectorAnchors()
+
+        // Layer is NOT deleted
+        #expect(session.document?.layers.count == initialLayers)
+        guard let layer = session.document?.layers.first(where: { $0.id == layerID }),
+              let vector = layer.vector else {
+            Issue.record("Vector layer expected")
+            return
+        }
+
+        #expect(vector.subpaths.isEmpty)
+        #expect(vector.totalAnchorCount == 0)
+        #expect(vector.isValid)
+        #expect(session.vectorSelection == nil)
+    }
+
+    // 68. Undo and redo of anchor deletion
+    @Test func undoAndRedoOfAnchorDeletion() {
+        let (session, layerID) = sessionWithVectorLayer()
+        session.selectTool(.directSelection)
+
+        let originalVector = session.document!.layers.first(where: { $0.id == layerID })!.vector!
+
+        let a1 = VectorAnchorIndex(subpathIndex: 0, anchorIndex: 1)
+        session.selectVectorAnchor(a1, in: layerID)
+
+        session.deleteSelectedVectorAnchors()
+
+        let vectorAfterDelete = session.document!.layers.first(where: { $0.id == layerID })!.vector!
+        #expect(vectorAfterDelete.subpaths[0].points.count == 2)
+
+        // Undo restores exact pre-delete model
+        session.undo()
+        let vectorAfterUndo = session.document!.layers.first(where: { $0.id == layerID })!.vector!
+        #expect(vectorAfterUndo == originalVector)
+
+        // Redo applies deletion again
+        session.redo()
+        let vectorAfterRedo = session.document!.layers.first(where: { $0.id == layerID })!.vector!
+        #expect(vectorAfterRedo == vectorAfterDelete)
+    }
+
+    // 69. Delete key pressed in Direct Selection routes to anchor deletion
+    @Test func deleteKeyPressedInDirectSelectionRoutesToAnchorDeletion() {
+        let (session, layerID) = sessionWithVectorLayer()
+        session.selectTool(.directSelection)
+
+        let a1 = VectorAnchorIndex(subpathIndex: 0, anchorIndex: 1)
+        session.selectVectorAnchor(a1, in: layerID)
+
+        let initialLayers = session.document?.layers.count ?? 0
+
+        // User hits Delete key
+        session.deleteKeyPressed()
+
+        // Layer is not deleted; anchor is deleted
+        #expect(session.document?.layers.count == initialLayers)
+        let vector = session.document!.layers.first(where: { $0.id == layerID })!.vector!
+        #expect(vector.subpaths[0].points.count == 2)
     }
 }

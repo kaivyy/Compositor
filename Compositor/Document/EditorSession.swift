@@ -581,12 +581,14 @@ final class EditorSession {
     var isModified: Bool { history.isModified }
     var canUseHistory: Bool {
         _ = showsBusy
-        return selectionAmountOperation == nil && textDraft == nil && !isProjectBusy && !isImporting && brushStroke == nil && warpStroke == nil && levels == nil && !showsNewDocument && !showsImporter && renamingLayerID == nil && importError == nil && transformEdit == nil && !showsConversionSheet
+        return selectionAmountOperation == nil && textDraft == nil && !isProjectBusy && !isImporting && brushStroke == nil && warpStroke == nil && levels == nil && !showsNewDocument && !showsImporter && renamingLayerID == nil && importError == nil && transformEdit == nil && !showsConversionSheet && directSelectionDrag == nil
     }
-    var canUndo: Bool { canUseHistory && (history.canUndo || gradientEdit != nil) }
-    var canRedo: Bool { canUseHistory && history.canRedo }
+    var canUndo: Bool { canUseHistory && (history.canUndo || gradientEdit != nil || penDraft != nil) }
+    var canRedo: Bool { canUseHistory && penDraft == nil && history.canRedo }
 
     func undo() {
+        if penDraft != nil { undoPenDraft(); return }
+        if directSelectionDrag != nil { return }
         // Like Photoshop, the first Undo discards a pending gradient.
         if gradientEdit != nil { cancelGradient(); return }
         guard canUndo, let snapshot = history.undo() else { return }
@@ -594,6 +596,8 @@ final class EditorSession {
     }
 
     func redo() {
+        if penDraft != nil { return }
+        if directSelectionDrag != nil { return }
         guard canRedo, let snapshot = history.redo() else { return }
         restore(snapshot)
     }
@@ -601,6 +605,8 @@ final class EditorSession {
     private func restore(_ snapshot: DocumentHistory.Snapshot) {
         cancelCrop()
         cancelGradient()
+        cancelPen()
+        cancelDirectSelection()
         let changedCanvas = document?.id != snapshot.document?.id
         let keepMaskTarget = isMaskSelected && activeLayerID == snapshot.activeLayerID
         document = snapshot.document
