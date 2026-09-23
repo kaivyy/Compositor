@@ -824,8 +824,7 @@ final class CanvasView: NSView {
             let stroke = session.brushStroke?.layer.id == layer.id ? session.brushStroke
                 : session.gradientEdit?.raster.layer.id == layer.id ? session.gradientEdit?.raster
                 : session.pixelMove?.raster.layer.id == layer.id ? session.pixelMove?.raster : nil
-            // An empty layer has nothing to draw, unless a filter (Vignette) is previewing pixels onto it.
-            guard layer.asset != nil || stroke != nil || session.filterEdit?.previewImage(for: layer.id) != nil else { return }
+            guard layer.asset != nil || stroke != nil else { return }
             // Smudge or Liquify in progress: the layer as the stroke has reshaped it so far, across the canvas.
             if let warp = session.warpStroke, warp.layer.id == layer.id, let image = warp.image {
                 let canvas = LayerTransform(origin: .zero, size: document.size)
@@ -1147,7 +1146,7 @@ final class CanvasView: NSView {
         // only tools whose cursor depends on where the pointer is also track movement.
         // The picker panel stays key, so sampling must track while this window is not.
         var options: NSTrackingArea.Options = [.mouseEnteredAndExited, picking ? .activeAlways : .activeInKeyWindow, .inVisibleRect]
-        if picking || session.tool == .move || session.tool.isBrushTool || session.tool.isSelectionTool {
+        if picking || session.tool == .move || session.tool.isBrushTool || session.tool.isSelectionTool || session.tool == .pen || session.tool == .directSelection {
             options.formUnion([.mouseMoved, .cursorUpdate])
         }
         let area = NSTrackingArea(rect: .zero, options: options, owner: self)
@@ -1263,6 +1262,13 @@ final class CanvasView: NSView {
             }
             return
         }
+        if session.tool == .pen, let document = session.document {
+            let point = convert(event.locationInWindow, from: nil)
+            let docPoint = session.viewport.documentPoint(from: point, documentSize: document.size)
+            session.movePen(to: docPoint)
+            synchronizeDisplay()
+            return
+        }
         brushPointer = convert(event.locationInWindow, from: nil)
         updateBrushCursor()
         if session.tool == .move { updateTransformCursor(at: convert(event.locationInWindow, from: nil), flags: event.modifierFlags) }
@@ -1347,8 +1353,36 @@ final class CanvasView: NSView {
     /// Right-drag with a brush tool: left and right resize the brush from its size at the press, or with Shift
     /// change its hardness. The brush circle stays where the press was.
     private var brushTipDrag: (start: CGPoint, diameter: CGFloat, hardness: CGFloat, hardnessShown: Bool)?
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let point = convert(event.locationInWindow, from: nil)
+        if session.tool == .directSelection {
+            let target = session.resolveDirectSelectionContextualTarget(at: point)
+            synchronizeDisplay()
+            return vectorContextMenu(for: target)
+        }
+        return super.menu(for: event)
+    }
+
+    private func vectorContextMenu(for target: DirectSelectionHitTarget?) -> NSMenu? {
+        guard target != nil || session.vectorSelection != nil else { return nil }
+        let menu = NSMenu()
+        let deselectItem = NSMenuItem(title: "Deselect", action: #selector(deselectVectorSelection(_:)), keyEquivalent: "")
+        deselectItem.target = self
+        menu.addItem(deselectItem)
+        return menu
+    }
+
+    @objc private func deselectVectorSelection(_ sender: Any?) {
+        session.deselectVectorAnchors()
+        synchronizeDisplay()
+    }
+
     override func rightMouseDown(with event: NSEvent) {
         guard session.tool.isBrushTool, session.brushStroke == nil, session.warpStroke == nil, !spaceHeld else {
+            if !spaceHeld, let menu = menu(for: event) {
+                NSMenu.popUpContextMenu(menu, with: event, for: self)
+                return
+            }
             super.rightMouseDown(with: event); return
         }
         let point = convert(event.locationInWindow, from: nil)
@@ -1466,6 +1500,10 @@ final class CanvasView: NSView {
             beginTextGesture(at: point, event: event)
         } else if session.tool == .shape, let document = session.document {
             session.beginShape(at: session.viewport.documentPoint(from: point, documentSize: document.size))
+        } else if session.tool == .pen, let document = session.document {
+            penMouseDown(at: point, event: event)
+        } else if session.tool == .directSelection {
+            directSelectionMouseDown(at: point, event: event)
         } else if session.tool == .crop {
             beginCropDrag(at: point)
         } else if session.tool == .move {
@@ -1531,6 +1569,16 @@ final class CanvasView: NSView {
             // Unlike the Marquee, Option has no other job here, so it draws from the center as in Photoshop.
             session.dragShape(to: session.viewport.documentPoint(from: point, documentSize: document.size),
                               square: event.modifierFlags.contains(.shift), fromCenter: event.modifierFlags.contains(.option))
+            synchronizeDisplay()
+            return
+        }
+        if session.tool == .pen, session.penDraft != nil, lastDragPoint == nil, let document = session.document {
+            session.dragPen(to: session.viewport.documentPoint(from: point, documentSize: document.size))
+            synchronizeDisplay()
+            return
+        }
+        if session.tool == .directSelection, session.directSelectionDrag != nil, let document = session.document {
+            session.dragDirectSelection(to: session.viewport.documentPoint(from: point, documentSize: document.size))
             synchronizeDisplay()
             return
         }
@@ -1683,6 +1731,14 @@ final class CanvasView: NSView {
             session.finishShape()
             synchronizeDisplay()
         }
+        if session.tool == .pen, session.penDraft?.isDragging == true {
+            session.endPenDrag()
+            synchronizeDisplay()
+        }
+        if session.tool == .directSelection, session.directSelectionDrag != nil {
+            session.endDirectSelectionDrag()
+            synchronizeDisplay()
+        }
         if hueTargetStart != nil {
             hueTargetStart = nil
             session.endHueTargeting()
@@ -1773,6 +1829,18 @@ final class CanvasView: NSView {
             else { session.removeLastLassoPoint() }
             synchronizeDisplay()
             refreshLassoCursor()
+        } else if session.tool == .directSelection, session.directSelectionDrag != nil, event.keyCode == 53 {
+            session.cancelDirectSelectionDrag()
+            synchronizeDisplay()
+        } else if session.tool == .directSelection, session.vectorSelection != nil, event.keyCode == 53 {
+            session.deselectVectorAnchors()
+            synchronizeDisplay()
+        } else if session.penDraft != nil, event.keyCode == 53 {
+            session.cancelPen()
+            synchronizeDisplay()
+        } else if session.penDraft != nil, [36, 76].contains(event.keyCode) {
+            session.finishPen()
+            synchronizeDisplay()
         } else if session.shapeDraft != nil, event.keyCode == 53 {
             session.cancelShape()
             synchronizeDisplay()
@@ -1841,6 +1909,8 @@ final class CanvasView: NSView {
             case "u":
                 if event.modifierFlags.contains(.shift), session.tool == .shape { session.toggleShapeKind() }
                 else { session.selectTool(.shape) }
+            case "p": session.selectTool(.pen)
+            case "a": session.selectTool(.directSelection)
             case "i": session.selectTool(.eyedropper)
             // M chooses the Marquee in whichever shape it was last set to; the shape is switched in the tool
             // bar. Ignoring a repeat keeps holding the key from doing anything odd.
@@ -1951,6 +2021,40 @@ final class CanvasView: NSView {
         if !flags.contains(.shift) { marqueeConstrainArmed = true }
         marqueeDragPixel = pixel
         session.dragMarquee(to: pixel, square: marqueeConstrainArmed && flags.contains(.shift), fromCenter: false)
+    }
+
+    private func penMouseDown(at point: CGPoint, event: NSEvent) {
+        guard let document = session.document else { return }
+        if let draft = session.penDraft, draft.subpath.points.count >= 2 {
+            let firstAnchorDoc = draft.subpath.points[0].anchor
+            let firstAnchorView = session.viewport.viewPoint(from: firstAnchorDoc, documentSize: document.size)
+            if hypot(firstAnchorView.x - point.x, firstAnchorView.y - point.y) <= 10.0 {
+                session.closePen()
+                synchronizeDisplay()
+                return
+            }
+        }
+        let docPoint = session.viewport.documentPoint(from: point, documentSize: document.size)
+        session.beginPen(at: docPoint)
+        synchronizeDisplay()
+    }
+
+    private func directSelectionMouseDown(at point: CGPoint, event: NSEvent) {
+        guard let document = session.document else { return }
+        let toggle = event.modifierFlags.contains(.shift)
+        if let target = session.hitTestDirectSelection(at: point) {
+            let docPoint = session.viewport.documentPoint(from: point, documentSize: document.size)
+            switch target.kind {
+            case .anchor:
+                session.beginDirectSelectionDrag(at: docPoint, clickedAnchor: target.anchorIndex, in: target.layerID, toggle: toggle)
+            case .handle(let side):
+                session.beginDirectSelectionHandleDrag(at: docPoint, target: target, side: side)
+            }
+            synchronizeDisplay()
+        } else if !toggle {
+            session.deselectVectorAnchors()
+            synchronizeDisplay()
+        }
     }
 
     /// Freehand starts an outline to drag. Polygonal adds a corner per click and closes on
