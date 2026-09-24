@@ -247,6 +247,12 @@ final class EditorSession {
     var penStrokeWidth: Double = 2
     /// The vector path draft being created with the Pen tool.
     var penDraft: PenDraft?
+    /// Transient hover state: the committed vector endpoint the pointer is near (for continuation feedback).
+    var penHoverEndpoint: PenEndpointHit?
+    /// Transient hover state: the committed vector layer the pointer is over/near in Pen tool mode.
+    var penHoverVectorLayer: PenVectorLayerHit?
+    /// Transient hover state: the committed closed vector anchor the pointer is over in Pen tool mode.
+    var penHoverAnchor: DirectSelectionHitTarget?
     /// Transient selection of vector anchor points for the Direct Selection tool.
     var vectorSelection: VectorSelection?
     /// Transient drag state when moving vector anchor points with Direct Selection.

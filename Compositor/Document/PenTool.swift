@@ -7,15 +7,38 @@ struct PenDraft: Equatable, Sendable {
     var activeAnchorIndex: Int?
     var isDragging: Bool
     var pointer: CGPoint?
+    /// When continuing an existing vector layer's open subpath, the layer it came from.
+    var continuingLayerID: UUID?
+    /// When continuing, whether the draft was reversed (started from the last endpoint instead of the first).
+    var continuingReversed: Bool = false
 
-    init(subpath: VectorSubpath = VectorSubpath(), activeAnchorIndex: Int? = nil, isDragging: Bool = false, pointer: CGPoint? = nil) {
+    init(subpath: VectorSubpath = VectorSubpath(), activeAnchorIndex: Int? = nil, isDragging: Bool = false, pointer: CGPoint? = nil, continuingLayerID: UUID? = nil, continuingReversed: Bool = false) {
         self.subpath = subpath
         self.activeAnchorIndex = activeAnchorIndex
         self.isDragging = isDragging
         self.pointer = pointer
+        self.continuingLayerID = continuingLayerID
+        self.continuingReversed = continuingReversed
     }
 
     var isClosed: Bool { subpath.isClosed }
+}
+
+/// Result of a pen endpoint hit test against committed vector layers.
+struct PenEndpointHit: Equatable, Sendable {
+    /// The layer whose open subpath endpoint was hit.
+    let layerID: UUID
+    /// True if the hit was on the last point; false if on the first.
+    let isLast: Bool
+    /// The endpoint position in document coordinates.
+    let point: CGPoint
+}
+
+/// Result of a pen vector layer hit test against committed vector layers.
+/// Used when the pointer is near or inside a committed vector path (such as a closed path).
+struct PenVectorLayerHit: Equatable, Sendable {
+    /// The committed vector layer that was hit.
+    let layerID: UUID
 }
 
 extension EditorSession {
@@ -86,16 +109,27 @@ extension EditorSession {
     func closePen() {
         guard var draft = penDraft, draft.subpath.points.count >= 2 else { return }
         draft.subpath.isClosed = true
+        let continuingID = draft.continuingLayerID
         penDraft = nil
-        commitPen(subpath: draft.subpath)
+        commitPen(subpath: draft.subpath, replacingLayerID: continuingID)
+        if let activeID = activeLayerID {
+            let target = DirectSelectionHitTarget(
+                layerID: activeID,
+                anchorIndex: VectorAnchorIndex(subpathIndex: 0, anchorIndex: 0),
+                kind: .anchor
+            )
+            penHoverAnchor = target
+            penHoverVectorLayer = PenVectorLayerHit(layerID: activeID)
+        }
     }
 
     /// Finishes an open path (e.g. via Enter/Return) and commits if valid.
     func finishPen() {
         guard let draft = penDraft else { return }
+        let continuingID = draft.continuingLayerID
         penDraft = nil
         if draft.subpath.points.count >= 2 || draft.subpath.isClosed {
-            commitPen(subpath: draft.subpath)
+            commitPen(subpath: draft.subpath, replacingLayerID: continuingID)
         }
     }
 
@@ -104,6 +138,9 @@ extension EditorSession {
         if penDraft != nil {
             penDraft = nil
         }
+        penHoverEndpoint = nil
+        penHoverAnchor = nil
+        penHoverVectorLayer = nil
     }
 
     /// Undoes the last anchor in the active Pen draft, or cancels the draft if 1 or 0 anchors remain.
@@ -121,13 +158,16 @@ extension EditorSession {
         }
     }
 
-    /// Commits a completed VectorSubpath into a new ImageLayer with canonical VectorModel and derived raster cache.
-    func commitPen(subpath: VectorSubpath) {
+    /// Commits a completed VectorSubpath into a new or existing ImageLayer with canonical VectorModel and derived raster cache.
+    /// When `replacingLayerID` is set, the existing layer is replaced in-place (continuation workflow).
+    func commitPen(subpath: VectorSubpath, replacingLayerID: UUID? = nil) {
         guard canEditLayers, document != nil, subpath.isValid, !subpath.points.isEmpty else { return }
 
-        let strokeWidth = CGFloat(penStrokeWidth)
-        let stroke = VectorStrokeStyle(color: foregroundColor, width: strokeWidth, lineCap: .round, lineJoin: .round, miterLimit: 10, isEnabled: true)
-        let fill = subpath.isClosed ? VectorFillStyle(color: foregroundColor, fillRule: .nonZero, isEnabled: true) : nil
+        // When continuing, preserve the original layer's stroke/fill if available.
+        // New Pen paths are transparent by default: fill == nil, stroke == nil.
+        let existingVector = replacingLayerID.flatMap { id in document?.layers.first { $0.id == id }?.vector }
+        let stroke: VectorStrokeStyle? = existingVector?.stroke
+        let fill: VectorFillStyle? = subpath.isClosed ? existingVector?.fill : nil
 
         // Compute document-space bounding box of the subpath
         let modelForBounds = VectorModel(subpaths: [subpath], fill: fill, stroke: stroke)
@@ -137,7 +177,8 @@ extension EditorSession {
         guard rawBounds.origin.x.isFinite, rawBounds.origin.y.isFinite,
               rawBounds.width.isFinite, rawBounds.height.isFinite else { return }
 
-        let padding = max(2, ceil(strokeWidth / 2) + 2)
+        let strokeWidth = stroke?.width ?? 0
+        let padding = max(4, ceil(strokeWidth / 2) + 2)
         let docRect = rawBounds.insetBy(dx: -padding, dy: -padding).integral
         let layerOrigin = docRect.origin
         let layerSize = CGSize(width: max(1, docRect.width), height: max(1, docRect.height))
@@ -153,11 +194,225 @@ extension EditorSession {
 
         do {
             let image = try VectorRenderer.render(localModel, in: layerSize)
-            addPixelLayer(image, at: layerOrigin, name: nextVectorName(), editName: "New Vector Layer",
-                          dropsSelection: false, vector: localModel)
+            if let replacingID = replacingLayerID,
+               let idx = document?.layers.firstIndex(where: { $0.id == replacingID }),
+               let thumbnail = try? PixelInvert.thumbnail(of: image) {
+                // Replace the original layer in-place, preserving its position in the stack.
+                let oldName = document!.layers[idx].name
+                beginEdit("Extend Vector Path")
+                document!.layers[idx].asset = ImportedImage(image: image, thumbnail: thumbnail, name: oldName)
+                document!.layers[idx].transform = LayerTransform(origin: layerOrigin, size: layerSize)
+                document!.layers[idx].vector = localModel
+                activeLayerID = replacingID
+                endEdit()
+            } else {
+                addPixelLayer(image, at: layerOrigin, name: nextVectorName(), editName: "New Vector Layer",
+                              dropsSelection: false, vector: localModel)
+            }
         } catch {
             brushError = error.localizedDescription
         }
+    }
+
+    /// Hit-tests committed vector layers for an open-subpath endpoint near `viewPoint`.
+    /// Returns the nearest match within `tolerance` view points, or nil.
+    func hitTestPenEndpoint(at viewPoint: CGPoint, tolerance: CGFloat = 10) -> PenEndpointHit? {
+        guard let document else { return nil }
+        var best: (hit: PenEndpointHit, distance: CGFloat)?
+        for layer in document.layers where layer.isVisible && layer.vector != nil {
+            guard let vector = layer.vector else { continue }
+            let layerToDoc = layer.transform.layerToDocument
+            for subpath in vector.subpaths where !subpath.isClosed && subpath.points.count >= 2 {
+                let first = subpath.points[0].anchor.applying(layerToDoc)
+                let last = subpath.points[subpath.points.count - 1].anchor.applying(layerToDoc)
+                let firstView = viewport.viewPoint(from: first, documentSize: document.size)
+                let lastView = viewport.viewPoint(from: last, documentSize: document.size)
+                let dFirst = hypot(firstView.x - viewPoint.x, firstView.y - viewPoint.y)
+                let dLast = hypot(lastView.x - viewPoint.x, lastView.y - viewPoint.y)
+                if dFirst <= tolerance, dFirst < (best?.distance ?? .greatestFiniteMagnitude) {
+                    best = (PenEndpointHit(layerID: layer.id, isLast: false, point: first), dFirst)
+                }
+                if dLast <= tolerance, dLast < (best?.distance ?? .greatestFiniteMagnitude) {
+                    best = (PenEndpointHit(layerID: layer.id, isLast: true, point: last), dLast)
+                }
+            }
+        }
+        return best?.hit
+    }
+
+    private func hitTestClosedAnchor(
+        in layer: ImageLayer,
+        vector: VectorModel,
+        layerToView: CGAffineTransform,
+        viewPoint: CGPoint,
+        tolerance: CGFloat
+    ) -> VectorAnchorIndex? {
+        var closestAnchor: VectorAnchorIndex?
+        var minDistance = tolerance
+
+        for (subpathIndex, subpath) in vector.subpaths.enumerated() where subpath.isClosed {
+            for (anchorIndex, pt) in subpath.points.enumerated() {
+                let anchorView = pt.anchor.applying(layerToView)
+                let dist = hypot(anchorView.x - viewPoint.x, anchorView.y - viewPoint.y)
+                if dist <= minDistance {
+                    minDistance = dist
+                    closestAnchor = VectorAnchorIndex(subpathIndex: subpathIndex, anchorIndex: anchorIndex)
+                }
+            }
+        }
+        return closestAnchor
+    }
+
+    private func vectorPathContains(
+        vector: VectorModel,
+        layerToView: CGAffineTransform,
+        viewPoint: CGPoint,
+        pointsPerPixel: CGFloat,
+        tolerance: CGFloat
+    ) -> Bool {
+        var t = layerToView
+        // 1. Check fill area of closed subpaths
+        let closedSubpaths = vector.subpaths.filter(\.isClosed)
+        if !closedSubpaths.isEmpty {
+            let closedModel = VectorModel(subpaths: closedSubpaths, fill: vector.fill, stroke: nil)
+            let closedLocalPath = VectorBridge.cgPath(from: closedModel)
+            if let closedViewPath = closedLocalPath.copy(using: &t) {
+                let fillRule = vector.fill?.fillRule.cgFillRule ?? .winding
+                if closedViewPath.contains(viewPoint, using: fillRule) {
+                    return true
+                }
+            }
+        }
+
+        // 2. Check stroke of all subpaths within stroke tolerance
+        let localStrokeWidth = (vector.stroke?.isEnabled == true) ? (vector.stroke?.width ?? 1) : 1
+        let viewStrokeWidth = localStrokeWidth * pointsPerPixel
+        let hitWidth = max(viewStrokeWidth, tolerance * 2)
+
+        let fullLocalPath = VectorBridge.cgPath(from: vector)
+        if let fullViewPath = fullLocalPath.copy(using: &t) {
+            let strokedViewPath = fullViewPath.copy(
+                strokingWithWidth: hitWidth,
+                lineCap: vector.stroke?.lineCap.cgCap ?? .round,
+                lineJoin: vector.stroke?.lineJoin.cgJoin ?? .round,
+                miterLimit: vector.stroke?.miterLimit ?? 10
+            )
+            if strokedViewPath.contains(viewPoint) {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Hit-tests for an anchor point in a closed subpath across visible vector layers.
+    /// Layers are checked in visual stacking order (topmost first).
+    /// If a higher layer's path occludes lower layers at `viewPoint`, lower layers are not tested.
+    func hitTestPenClosedAnchor(at viewPoint: CGPoint, tolerance: CGFloat = 10) -> DirectSelectionHitTarget? {
+        guard let document else { return nil }
+        let docRect = viewport.documentRect(document.size)
+        let pointsPerPixel = viewport.pointsPerPixel
+        guard pointsPerPixel > 0 else { return nil }
+
+        let docToView = CGAffineTransform(translationX: docRect.origin.x, y: docRect.origin.y)
+            .scaledBy(x: pointsPerPixel, y: pointsPerPixel)
+
+        for layer in document.layers.reversed() where layer.isVisible && layer.vector != nil {
+            guard let vector = layer.vector, !vector.subpaths.isEmpty else { continue }
+            let layerToDoc = layer.transform.layerToDocument
+            let layerToView = layerToDoc.concatenating(docToView)
+
+            // Check anchor in this layer
+            if let anchorHit = hitTestClosedAnchor(in: layer, vector: vector, layerToView: layerToView, viewPoint: viewPoint, tolerance: tolerance) {
+                return DirectSelectionHitTarget(layerID: layer.id, anchorIndex: anchorHit, kind: .anchor)
+            }
+
+            // If this layer's path covers viewPoint, it occludes lower layers so an anchor on a lower layer cannot win
+            if vectorPathContains(vector: vector, layerToView: layerToView, viewPoint: viewPoint, pointsPerPixel: pointsPerPixel, tolerance: 6) {
+                return nil
+            }
+        }
+        return nil
+    }
+
+    /// Hit-tests committed vector layers for a click inside a closed subpath's fill area
+    /// or within stroke tolerance of any subpath's stroke path, in view/screen space.
+    /// Layers are checked in visual stacking order (topmost layer first).
+    /// Returns the topmost matching layer, or nil.
+    func hitTestPenVectorLayer(at viewPoint: CGPoint, tolerance: CGFloat = 6) -> PenVectorLayerHit? {
+        guard let document else { return nil }
+        let docRect = viewport.documentRect(document.size)
+        let pointsPerPixel = viewport.pointsPerPixel
+        guard pointsPerPixel > 0 else { return nil }
+
+        let docToView = CGAffineTransform(translationX: docRect.origin.x, y: docRect.origin.y)
+            .scaledBy(x: pointsPerPixel, y: pointsPerPixel)
+
+        for layer in document.layers.reversed() where layer.isVisible && layer.vector != nil {
+            guard let vector = layer.vector, !vector.subpaths.isEmpty else { continue }
+            let layerToDoc = layer.transform.layerToDocument
+            let layerToView = layerToDoc.concatenating(docToView)
+
+            if vectorPathContains(vector: vector, layerToView: layerToView, viewPoint: viewPoint, pointsPerPixel: pointsPerPixel, tolerance: tolerance) {
+                return PenVectorLayerHit(layerID: layer.id)
+            }
+        }
+        return nil
+    }
+
+    /// Creates a document selection from the closed subpaths of the specified vector layer.
+    /// The vector's CGPath is transformed from layer-local to document coordinates,
+    /// then applied as the current DocumentSelection.
+    func makeSelectionFromVector(layerID: UUID) {
+        guard let document, canEditSelection,
+              let layer = document.layers.first(where: { $0.id == layerID }),
+              let vector = layer.vector else { return }
+
+        let closedSubpaths = vector.subpaths.filter(\.isClosed)
+        guard !closedSubpaths.isEmpty else { return }
+
+        let closedModel = VectorModel(subpaths: closedSubpaths, fill: vector.fill, stroke: nil)
+        let localPath = VectorBridge.cgPath(from: closedModel)
+        var layerToDoc = layer.transform.layerToDocument
+        guard let docPath = localPath.copy(using: &layerToDoc) else { return }
+
+        applySelection(docPath, mode: .replace, name: "Make Selection")
+    }
+
+    /// Begins continuing an existing vector layer's open subpath from `hit`.
+    /// The draft's subpath is loaded in document coordinates so new anchors land correctly.
+    func beginPenContinuation(from hit: PenEndpointHit) {
+        guard let document, let layerIndex = document.layers.firstIndex(where: { $0.id == hit.layerID }),
+              let vector = document.layers[layerIndex].vector,
+              let subpath = vector.subpaths.first, !subpath.isClosed else { return }
+
+        let layerToDoc = document.layers[layerIndex].transform.layerToDocument
+        // Translate layer-local points to document coordinates
+        var docSubpath = VectorSubpath(points: subpath.points.map { pt in
+            VectorPoint(
+                anchor: pt.anchor.applying(layerToDoc),
+                previousControl: pt.previousControl?.applying(layerToDoc),
+                nextControl: pt.nextControl?.applying(layerToDoc)
+            )
+        }, isClosed: false)
+
+        // If the user clicked the first point, reverse so we always extend from the end
+        let reversed = !hit.isLast
+        if reversed {
+            docSubpath.points.reverse()
+            // Swap control handles after reversal
+            docSubpath.points = docSubpath.points.map { pt in
+                VectorPoint(anchor: pt.anchor, previousControl: pt.nextControl, nextControl: pt.previousControl)
+            }
+        }
+
+        penDraft = PenDraft(
+            subpath: docSubpath,
+            activeAnchorIndex: docSubpath.points.count - 1,
+            isDragging: false,
+            pointer: nil,
+            continuingLayerID: hit.layerID,
+            continuingReversed: reversed
+        )
     }
 
     func nextVectorName() -> String {

@@ -166,8 +166,8 @@ struct PenToolTests {
         #expect(vector.subpaths.count == 1)
         #expect(vector.subpaths[0].isClosed == true)
         #expect(vector.subpaths[0].points.count == 3, "Closing must not duplicate the initial anchor")
-        #expect(vector.fill != nil && vector.fill?.isEnabled == true)
-        #expect(vector.stroke != nil && vector.stroke?.isEnabled == true)
+        #expect(vector.fill == nil, "Pen closed path must be transparent by default")
+        #expect(vector.stroke == nil, "Pen path must have no stroke by default")
     }
 
     @Test func enterCommitsAnOpenPath() {
@@ -193,7 +193,8 @@ struct PenToolTests {
         #expect(vector.subpaths.count == 1)
         #expect(vector.subpaths[0].isClosed == false)
         #expect(vector.subpaths[0].points.count == 2)
-        #expect(vector.stroke != nil)
+        #expect(vector.stroke == nil, "Open Pen path has no stroke by default")
+        #expect(vector.fill == nil, "Open Pen path has no fill by default")
         #expect(layer.asset != nil)
     }
 
@@ -254,8 +255,8 @@ struct PenToolTests {
         #expect(layer.name == "Vector 1")
         #expect(vector.subpaths.count == 1)
         #expect(vector.subpaths[0].points.count == 2)
-        #expect(vector.stroke?.color == session.foregroundColor)
-        #expect(vector.stroke?.width == 2)
+        #expect(vector.stroke == nil, "Pen path has no stroke by default")
+        #expect(vector.fill == nil, "Pen path has no fill by default")
         #expect(asset.image.width > 0 && asset.image.height > 0)
         #expect(layer.transform.size.width >= 1 && layer.transform.size.height >= 1)
     }
@@ -595,5 +596,756 @@ struct PenToolTests {
         session.undo()
         let layerIDsAfterUndoA = session.document?.layers.map(\.id) ?? []
         #expect(!layerIDsAfterUndoA.contains(vectorAID))
+    }
+
+    // MARK: - Phase 2B-6: Path Continuation & Endpoint Hit-Testing
+
+    @Test func hitTestPenEndpointFindsEndpointsOnOpenVectorLayer() {
+        let session = makeSession()
+        // Draw an open path: (20, 20) -> (60, 60)
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 60))
+        session.endPenDrag()
+        session.finishPen()
+
+        guard let layer = session.activeLayer, layer.vector != nil else {
+            Issue.record("Committed layer expected")
+            return
+        }
+
+        let docSize = session.document!.size
+        let firstDoc = CGPoint(x: 20, y: 20)
+        let lastDoc = CGPoint(x: 60, y: 60)
+        let firstView = session.viewport.viewPoint(from: firstDoc, documentSize: docSize)
+        let lastView = session.viewport.viewPoint(from: lastDoc, documentSize: docSize)
+
+        // Hit first endpoint
+        let hitFirst = session.hitTestPenEndpoint(at: firstView, tolerance: 10)
+        #expect(hitFirst != nil)
+        #expect(hitFirst?.layerID == layer.id)
+        #expect(hitFirst?.isLast == false)
+        #expect(abs((hitFirst?.point.x ?? 0) - firstDoc.x) < 0.001)
+        #expect(abs((hitFirst?.point.y ?? 0) - firstDoc.y) < 0.001)
+
+        // Hit last endpoint
+        let hitLast = session.hitTestPenEndpoint(at: lastView, tolerance: 10)
+        #expect(hitLast != nil)
+        #expect(hitLast?.layerID == layer.id)
+        #expect(hitLast?.isLast == true)
+        #expect(abs((hitLast?.point.x ?? 0) - lastDoc.x) < 0.001)
+        #expect(abs((hitLast?.point.y ?? 0) - lastDoc.y) < 0.001)
+
+        // Miss (far away)
+        let farView = session.viewport.viewPoint(from: CGPoint(x: 150, y: 150), documentSize: docSize)
+        let hitFar = session.hitTestPenEndpoint(at: farView, tolerance: 10)
+        #expect(hitFar == nil)
+    }
+
+    @Test func hitTestPenEndpointIgnoresClosedPathsAndHiddenLayers() {
+        let session = makeSession()
+        // Draw a closed path
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 40, y: 50))
+        session.endPenDrag()
+        session.closePen()
+
+        let docSize = session.document!.size
+        let viewPt = session.viewport.viewPoint(from: CGPoint(x: 20, y: 20), documentSize: docSize)
+        #expect(session.hitTestPenEndpoint(at: viewPt, tolerance: 10) == nil)
+
+        // Hidden layer test: Draw an open path, hide the layer
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 30, y: 30))
+        session.endPenDrag()
+        session.finishPen()
+
+        guard let layerID = session.activeLayerID,
+              let idx = session.document?.layers.firstIndex(where: { $0.id == layerID }) else {
+            Issue.record("Layer expected")
+            return
+        }
+        session.document?.layers[idx].isVisible = false
+
+        let hiddenViewPt = session.viewport.viewPoint(from: CGPoint(x: 10, y: 10), documentSize: docSize)
+        #expect(session.hitTestPenEndpoint(at: hiddenViewPt, tolerance: 10) == nil)
+    }
+
+    @Test func beginPenContinuationResumesFromLastEndpoint() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 60))
+        session.endPenDrag()
+        session.finishPen()
+
+        guard session.activeLayer != nil, let layerID = session.activeLayerID else {
+            Issue.record("Initial layer expected")
+            return
+        }
+        let initialLayerCount = session.document?.layers.count ?? 0
+
+        let docSize = session.document!.size
+        let lastView = session.viewport.viewPoint(from: CGPoint(x: 60, y: 60), documentSize: docSize)
+        guard let hit = session.hitTestPenEndpoint(at: lastView, tolerance: 10) else {
+            Issue.record("Hit expected")
+            return
+        }
+
+        session.beginPenContinuation(from: hit)
+
+        #expect(session.penDraft != nil)
+        #expect(session.penDraft?.continuingLayerID == layerID)
+        #expect(session.penDraft?.continuingReversed == false)
+        #expect(session.penDraft?.subpath.points.count == 2)
+
+        // Add 3rd point and finish
+        session.beginPen(at: CGPoint(x: 100, y: 60))
+        session.endPenDrag()
+        session.finishPen()
+
+        #expect(session.penDraft == nil)
+        #expect(session.document?.layers.count == initialLayerCount) // In-place replacement
+        guard let continuedLayer = session.document?.layers.first(where: { $0.id == layerID }),
+              let vector = continuedLayer.vector else {
+            Issue.record("Continued layer vector expected")
+            return
+        }
+        #expect(vector.subpaths[0].points.count == 3)
+    }
+
+    @Test func beginPenContinuationFromFirstEndpointReversesSubpath() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 60))
+        session.endPenDrag()
+        session.finishPen()
+
+        guard let layerID = session.activeLayerID else {
+            Issue.record("Initial layer expected")
+            return
+        }
+        let initialLayerCount = session.document?.layers.count ?? 0
+
+        let docSize = session.document!.size
+        let firstView = session.viewport.viewPoint(from: CGPoint(x: 20, y: 20), documentSize: docSize)
+        guard let hit = session.hitTestPenEndpoint(at: firstView, tolerance: 10) else {
+            Issue.record("Hit expected")
+            return
+        }
+
+        #expect(hit.isLast == false)
+        session.beginPenContinuation(from: hit)
+
+        #expect(session.penDraft != nil)
+        #expect(session.penDraft?.continuingLayerID == layerID)
+        #expect(session.penDraft?.continuingReversed == true)
+        // Because reversed, point 0 is original (60, 60), point 1 is original (20, 20)
+        let draftPoints = session.penDraft!.subpath.points
+        #expect(abs(draftPoints[0].anchor.x - 60) < 0.001)
+        #expect(abs(draftPoints[1].anchor.x - 20) < 0.001)
+
+        // Extend from the original start point
+        session.beginPen(at: CGPoint(x: 10, y: 40))
+        session.endPenDrag()
+        session.finishPen()
+
+        #expect(session.document?.layers.count == initialLayerCount)
+        guard let continuedLayer = session.document?.layers.first(where: { $0.id == layerID }),
+              let vector = continuedLayer.vector else {
+            Issue.record("Continued layer vector expected")
+            return
+        }
+        #expect(vector.subpaths[0].points.count == 3)
+    }
+
+    @Test func continuationPreservesStrokeSettings() {
+        let session = makeSession()
+        let subpath = VectorSubpath(points: [
+            VectorPoint(anchor: CGPoint(x: 10, y: 10)),
+            VectorPoint(anchor: CGPoint(x: 50, y: 50))
+        ], isClosed: false)
+        let stroke = VectorStrokeStyle(color: PaletteColor(red: 0, green: 0, blue: 1), width: 8)
+        let model = VectorModel(subpaths: [subpath], fill: nil, stroke: stroke)
+        let image = try! VectorRenderer.render(model, in: CGSize(width: 60, height: 60))
+        session.addPixelLayer(image, at: .zero, name: "InitialVector", editName: "Add Vector", vector: model)
+
+        guard let layerID = session.activeLayerID,
+              let vectorBefore = session.activeLayer?.vector else {
+            Issue.record("Vector expected")
+            return
+        }
+        #expect(vectorBefore.stroke?.width == 8)
+
+        // Change current tool settings to something else
+        session.penStrokeWidth = 2
+        session.foregroundColor = PaletteColor(red: 1, green: 1, blue: 0)
+
+        // Continue the layer
+        let docSize = session.document!.size
+        let lastView = session.viewport.viewPoint(from: CGPoint(x: 50, y: 50), documentSize: docSize)
+        guard let hit = session.hitTestPenEndpoint(at: lastView, tolerance: 10) else {
+            Issue.record("Hit expected")
+            return
+        }
+        session.beginPenContinuation(from: hit)
+        session.beginPen(at: CGPoint(x: 90, y: 90))
+        session.endPenDrag()
+        session.finishPen()
+
+        guard let vectorAfter = session.document?.layers.first(where: { $0.id == layerID })?.vector else {
+            Issue.record("Vector after expected")
+            return
+        }
+        // Should preserve original stroke width 8
+        #expect(vectorAfter.stroke?.width == 8)
+    }
+
+    // MARK: - Phase 2B-7: Closed Vector Path Interaction, Selection & Hit Testing
+
+    @Test func hitTestPenVectorLayerFindsInsideClosedPath() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 40, y: 60))
+        session.endPenDrag()
+        session.closePen()
+
+        guard let layerID = session.activeLayerID else {
+            Issue.record("Committed layer expected")
+            return
+        }
+
+        let docSize = session.document!.size
+        // (40, 30) is inside the triangle (20,20)-(60,20)-(40,60)
+        let insideView = session.viewport.viewPoint(from: CGPoint(x: 40, y: 30), documentSize: docSize)
+        let hit = session.hitTestPenVectorLayer(at: insideView)
+        #expect(hit != nil)
+        #expect(hit?.layerID == layerID)
+    }
+
+    @Test func hitTestPenVectorLayerReturnsNilForOutsidePoint() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 40, y: 60))
+        session.endPenDrag()
+        session.closePen()
+
+        let docSize = session.document!.size
+        // (150, 150) is well outside the triangle
+        let outsideView = session.viewport.viewPoint(from: CGPoint(x: 150, y: 150), documentSize: docSize)
+        let hit = session.hitTestPenVectorLayer(at: outsideView)
+        #expect(hit == nil)
+    }
+
+    @Test func hitTestPenVectorLayerPrefersTopmostLayerWhenOverlapping() {
+        let session = makeSession()
+        // Bottom layer: (10, 10) to (100, 100)
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 100, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 100, y: 100))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 10, y: 100))
+        session.endPenDrag()
+        session.closePen()
+        guard let bottomLayerID = session.activeLayerID else {
+            Issue.record("Bottom layer expected")
+            return
+        }
+
+        // Top layer: (20, 20) to (80, 80)
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 80, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 80, y: 80))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 20, y: 80))
+        session.endPenDrag()
+        session.closePen()
+        guard let topLayerID = session.activeLayerID else {
+            Issue.record("Top layer expected")
+            return
+        }
+
+        #expect(bottomLayerID != topLayerID)
+
+        let docSize = session.document!.size
+        // (50, 50) is inside both shapes; topmost layer should win
+        let centerView = session.viewport.viewPoint(from: CGPoint(x: 50, y: 50), documentSize: docSize)
+        let hit = session.hitTestPenVectorLayer(at: centerView)
+        #expect(hit?.layerID == topLayerID)
+    }
+
+    @Test func makeSelectionFromVectorCreatesDocumentSelectionForClosedPath() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 40, y: 60))
+        session.endPenDrag()
+        session.closePen()
+
+        guard let layerID = session.activeLayerID else {
+            Issue.record("Committed layer expected")
+            return
+        }
+
+        #expect(session.selection == nil)
+
+        session.makeSelectionFromVector(layerID: layerID)
+
+        #expect(session.selection != nil)
+        #expect(session.selection?.isEmpty == false)
+
+        let bounds = session.selection!.path.boundingBoxOfPath
+        #expect(bounds.minX >= 19 && bounds.minX <= 21)
+        #expect(bounds.maxX >= 59 && bounds.maxX <= 61)
+        #expect(bounds.minY >= 19 && bounds.minY <= 21)
+        #expect(bounds.maxY >= 59 && bounds.maxY <= 61)
+    }
+
+    @Test func makeSelectionFromVectorIgnoresOpenSubpaths() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 60))
+        session.endPenDrag()
+        session.finishPen()
+
+        guard let layerID = session.activeLayerID else {
+            Issue.record("Committed layer expected")
+            return
+        }
+
+        #expect(session.selection == nil)
+
+        session.makeSelectionFromVector(layerID: layerID)
+
+        // Open path should NOT create a selection
+        #expect(session.selection == nil)
+    }
+
+    @Test func hitTestPenVectorLayerIgnoresHiddenLayers() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 40, y: 60))
+        session.endPenDrag()
+        session.closePen()
+
+        guard let layerIndex = session.document?.layers.firstIndex(where: { $0.id == session.activeLayerID }) else {
+            Issue.record("Layer index expected")
+            return
+        }
+
+        // Hide the layer
+        session.document?.layers[layerIndex].isVisible = false
+
+        let docSize = session.document!.size
+        let insideView = session.viewport.viewPoint(from: CGPoint(x: 40, y: 30), documentSize: docSize)
+        let hit = session.hitTestPenVectorLayer(at: insideView)
+        #expect(hit == nil)
+    }
+
+    // MARK: - Phase 2B-7: Closed Anchor Hit-Testing & Priority
+
+    @Test func closedStartAnchorHitResolvesExactAnchorIndexZero() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 40, y: 60))
+        session.endPenDrag()
+        session.closePen()
+
+        guard let layerID = session.activeLayerID else {
+            Issue.record("Committed layer expected")
+            return
+        }
+
+        let docSize = session.document!.size
+        let startView = session.viewport.viewPoint(from: CGPoint(x: 20, y: 20), documentSize: docSize)
+        guard let anchorHit = session.hitTestPenClosedAnchor(at: startView) else {
+            Issue.record("Anchor hit expected at start anchor")
+            return
+        }
+
+        #expect(anchorHit.layerID == layerID)
+        #expect(anchorHit.anchorIndex.subpathIndex == 0)
+        #expect(anchorHit.anchorIndex.anchorIndex == 0)
+        #expect(anchorHit.kind == .anchor)
+    }
+
+    @Test func closedNonStartAnchorsResolveCorrectIndices() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 20, y: 20)) // index 0
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 20)) // index 1
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 40, y: 60)) // index 2
+        session.endPenDrag()
+        session.closePen()
+
+        guard let layerID = session.activeLayerID else {
+            Issue.record("Committed layer expected")
+            return
+        }
+
+        let docSize = session.document!.size
+
+        // Test Anchor B (index 1)
+        let bView = session.viewport.viewPoint(from: CGPoint(x: 60, y: 20), documentSize: docSize)
+        guard let hitB = session.hitTestPenClosedAnchor(at: bView) else {
+            Issue.record("Anchor hit expected at anchor B")
+            return
+        }
+        #expect(hitB.layerID == layerID)
+        #expect(hitB.anchorIndex.subpathIndex == 0)
+        #expect(hitB.anchorIndex.anchorIndex == 1)
+
+        // Test Anchor C (index 2)
+        let cView = session.viewport.viewPoint(from: CGPoint(x: 40, y: 60), documentSize: docSize)
+        guard let hitC = session.hitTestPenClosedAnchor(at: cView) else {
+            Issue.record("Anchor hit expected at anchor C")
+            return
+        }
+        #expect(hitC.layerID == layerID)
+        #expect(hitC.anchorIndex.subpathIndex == 0)
+        #expect(hitC.anchorIndex.anchorIndex == 2)
+    }
+
+    @Test func closedAnchorHitResolvesCorrectSubpathIndexForMultipleSubpaths() throws {
+        let session = makeSession()
+        // Subpath 0
+        let subpath0 = VectorSubpath(points: [
+            VectorPoint(anchor: CGPoint(x: 10, y: 10)),
+            VectorPoint(anchor: CGPoint(x: 40, y: 10)),
+            VectorPoint(anchor: CGPoint(x: 25, y: 40))
+        ], isClosed: true)
+
+        // Subpath 1
+        let subpath1 = VectorSubpath(points: [
+            VectorPoint(anchor: CGPoint(x: 60, y: 60)),
+            VectorPoint(anchor: CGPoint(x: 90, y: 60)),
+            VectorPoint(anchor: CGPoint(x: 75, y: 90))
+        ], isClosed: true)
+
+        let vector = VectorModel(subpaths: [subpath0, subpath1], fill: nil, stroke: VectorStrokeStyle(color: PaletteColor(red: 0, green: 0, blue: 0), width: 2))
+        let image = try VectorRenderer.render(vector, in: CGSize(width: 200, height: 200))
+        session.addPixelLayer(image, at: .zero, name: "Multi-Subpath", editName: "Add Vector", vector: vector)
+        let layerID = session.activeLayerID!
+
+        let docSize = session.document!.size
+
+        // Query anchor on Subpath 0
+        let sp0View = session.viewport.viewPoint(from: CGPoint(x: 40, y: 10), documentSize: docSize)
+        let hit0 = session.hitTestPenClosedAnchor(at: sp0View)
+        #expect(hit0?.anchorIndex.subpathIndex == 0)
+        #expect(hit0?.anchorIndex.anchorIndex == 1)
+
+        // Query anchor on Subpath 1
+        let sp1View = session.viewport.viewPoint(from: CGPoint(x: 75, y: 90), documentSize: docSize)
+        let hit1 = session.hitTestPenClosedAnchor(at: sp1View)
+        #expect(hit1?.anchorIndex.subpathIndex == 1)
+        #expect(hit1?.anchorIndex.anchorIndex == 2)
+    }
+
+    @Test func closedAnchorHitPrioritizesTopmostLayer() {
+        let session = makeSession()
+        // Bottom layer with anchor at (50, 50)
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 50, y: 50))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 10, y: 90))
+        session.endPenDrag()
+        session.closePen()
+        guard let bottomLayerID = session.activeLayerID else {
+            Issue.record("Bottom layer expected")
+            return
+        }
+
+        // Top layer also with anchor at (50, 50)
+        session.beginPen(at: CGPoint(x: 90, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 50, y: 50))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 90, y: 90))
+        session.endPenDrag()
+        session.closePen()
+        guard let topLayerID = session.activeLayerID else {
+            Issue.record("Top layer expected")
+            return
+        }
+
+        #expect(bottomLayerID != topLayerID)
+
+        let docSize = session.document!.size
+        let viewPoint = session.viewport.viewPoint(from: CGPoint(x: 50, y: 50), documentSize: docSize)
+        let hit = session.hitTestPenClosedAnchor(at: viewPoint)
+        #expect(hit?.layerID == topLayerID)
+    }
+
+    @Test func topLayerPathOccludesLowerLayerAnchor() {
+        let session = makeSession()
+        // Bottom layer with anchor at (50, 50)
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 50, y: 50))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 10, y: 90))
+        session.endPenDrag()
+        session.closePen()
+
+        // Top layer is a rectangle covering (30, 30) to (70, 70), with NO anchor at (50, 50)
+        session.beginPen(at: CGPoint(x: 30, y: 30))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 70, y: 30))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 70, y: 70))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 30, y: 70))
+        session.endPenDrag()
+        session.closePen()
+        guard let topLayerID = session.activeLayerID else {
+            Issue.record("Top layer expected")
+            return
+        }
+
+        let docSize = session.document!.size
+        let centerView = session.viewport.viewPoint(from: CGPoint(x: 50, y: 50), documentSize: docSize)
+
+        // At (50, 50), top layer has NO anchor, but its path covers (50, 50).
+        // The bottom layer's anchor at (50, 50) must NOT win over top layer's path.
+        let anchorHit = session.hitTestPenClosedAnchor(at: centerView)
+        #expect(anchorHit == nil)
+
+        // Path-level hit resolves to the top layer
+        let pathHit = session.hitTestPenVectorLayer(at: centerView)
+        #expect(pathHit?.layerID == topLayerID)
+    }
+
+    @Test func clickingClosedAnchorDoesNotCreateNewDraftOrLayer() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 40, y: 60))
+        session.endPenDrag()
+        session.closePen()
+
+        guard let layerID = session.activeLayerID else {
+            Issue.record("Layer expected")
+            return
+        }
+        let initialLayerCount = session.document?.layers.count ?? 0
+
+        let docSize = session.document!.size
+        let startView = session.viewport.viewPoint(from: CGPoint(x: 20, y: 20), documentSize: docSize)
+        guard let anchorHit = session.hitTestPenClosedAnchor(at: startView) else {
+            Issue.record("Anchor hit expected")
+            return
+        }
+
+        // Simulate click on closed anchor
+        session.selectLayer(anchorHit.layerID)
+
+        #expect(session.activeLayerID == layerID)
+        #expect(session.penDraft == nil)
+        #expect(session.document?.layers.count == initialLayerCount)
+    }
+
+    // MARK: - Phase 2B-8 Tests
+
+    @Test func newlyCreatedPenPathHasNoFillAndNoStroke() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 60))
+        session.endPenDrag()
+        session.finishPen()
+
+        guard let layer = session.activeLayer, let vector = layer.vector else {
+            Issue.record("Layer should have vector")
+            return
+        }
+
+        #expect(vector.fill == nil)
+        #expect(vector.stroke == nil)
+        #expect(vector.subpaths.count == 1)
+        #expect(vector.subpaths[0].isClosed == false)
+        #expect(vector.subpaths[0].points.count == 2)
+    }
+
+    @Test func closingPenPathLeavesFillAndStrokeNil() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 50, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 30, y: 40))
+        session.endPenDrag()
+        session.closePen()
+
+        guard let layer = session.activeLayer, let vector = layer.vector else {
+            Issue.record("Layer should have vector")
+            return
+        }
+
+        #expect(vector.fill == nil)
+        #expect(vector.stroke == nil)
+        #expect(vector.subpaths.count == 1)
+        #expect(vector.subpaths[0].isClosed == true)
+        #expect(vector.subpaths[0].points.count == 3)
+    }
+
+    @Test func closedPathPreservesAllAnchorsAndClosingAnchorIdentified() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 50, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 30, y: 40))
+        session.endPenDrag()
+        session.closePen()
+
+        guard let layerID = session.activeLayerID,
+              let vector = session.activeLayer?.vector else {
+            Issue.record("Layer should have vector")
+            return
+        }
+
+        #expect(vector.subpaths[0].points.count == 3)
+        // Closing anchor is identified in transient state
+        #expect(session.penHoverAnchor != nil)
+        #expect(session.penHoverAnchor?.layerID == layerID)
+        #expect(session.penHoverAnchor?.anchorIndex.subpathIndex == 0)
+        #expect(session.penHoverAnchor?.anchorIndex.anchorIndex == 0)
+
+        // All anchors are resolvable
+        let docSize = session.document!.size
+        let p0View = session.viewport.viewPoint(from: CGPoint(x: 10, y: 10), documentSize: docSize)
+        let p1View = session.viewport.viewPoint(from: CGPoint(x: 50, y: 10), documentSize: docSize)
+        let p2View = session.viewport.viewPoint(from: CGPoint(x: 30, y: 40), documentSize: docSize)
+
+        #expect(session.hitTestPenClosedAnchor(at: p0View)?.anchorIndex.anchorIndex == 0)
+        #expect(session.hitTestPenClosedAnchor(at: p1View)?.anchorIndex.anchorIndex == 1)
+        #expect(session.hitTestPenClosedAnchor(at: p2View)?.anchorIndex.anchorIndex == 2)
+    }
+
+    @Test func vectorRendererRendersTransparentImageWhenFillAndStrokeAreNil() throws {
+        let subpath = VectorSubpath(points: [
+            VectorPoint(anchor: CGPoint(x: 10, y: 10)),
+            VectorPoint(anchor: CGPoint(x: 50, y: 10)),
+            VectorPoint(anchor: CGPoint(x: 30, y: 40))
+        ], isClosed: true)
+        let model = VectorModel(subpaths: [subpath], fill: nil, stroke: nil)
+        let image = try VectorRenderer.render(model, in: CGSize(width: 60, height: 50))
+        #expect(image.width == 60)
+        #expect(image.height == 50)
+    }
+
+    @Test func explicitlyStyledVectorLayerPreservesStyleWhenContinued() {
+        let session = makeSession()
+        let subpath = VectorSubpath(points: [
+            VectorPoint(anchor: CGPoint(x: 10, y: 10)),
+            VectorPoint(anchor: CGPoint(x: 50, y: 50))
+        ], isClosed: false)
+        let stroke = VectorStrokeStyle(color: PaletteColor(red: 1, green: 0, blue: 0), width: 6)
+        let model = VectorModel(subpaths: [subpath], fill: nil, stroke: stroke)
+        let image = try! VectorRenderer.render(model, in: CGSize(width: 60, height: 60))
+        session.addPixelLayer(image, at: .zero, name: "StyledVector", editName: "Add Vector", vector: model)
+        let layerID = session.activeLayerID!
+
+        let docSize = session.document!.size
+        let endView = session.viewport.viewPoint(from: CGPoint(x: 50, y: 50), documentSize: docSize)
+        guard let hit = session.hitTestPenEndpoint(at: endView) else {
+            Issue.record("Endpoint hit expected")
+            return
+        }
+
+        session.beginPenContinuation(from: hit)
+        session.beginPen(at: CGPoint(x: 90, y: 90))
+        session.endPenDrag()
+        session.finishPen()
+
+        guard let layer = session.document?.layers.first(where: { $0.id == layerID }),
+              let continuedVector = layer.vector else {
+            Issue.record("Continued layer vector expected")
+            return
+        }
+
+        #expect(continuedVector.stroke?.width == 6)
+        #expect(continuedVector.stroke?.color.red == 1)
+        #expect(continuedVector.subpaths[0].points.count == 3)
+    }
+
+    @Test func closedPathPersistenceRoundTripPreservesNoFillNoStrokeAndAllAnchors() throws {
+        let subpath = VectorSubpath(points: [
+            VectorPoint(anchor: CGPoint(x: 10, y: 10), previousControl: nil, nextControl: CGPoint(x: 20, y: 15)),
+            VectorPoint(anchor: CGPoint(x: 50, y: 20), previousControl: CGPoint(x: 40, y: 25), nextControl: nil),
+            VectorPoint(anchor: CGPoint(x: 30, y: 60))
+        ], isClosed: true)
+        let original = VectorModel(subpaths: [subpath], fill: nil, stroke: nil)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(VectorModel.self, from: data)
+
+        #expect(decoded.fill == nil)
+        #expect(decoded.stroke == nil)
+        #expect(decoded.subpaths.count == 1)
+        #expect(decoded.subpaths[0].isClosed == true)
+        #expect(decoded.subpaths[0].points.count == 3)
+        #expect(decoded.subpaths[0].points[0].nextControl == CGPoint(x: 20, y: 15))
+        #expect(decoded.subpaths[0].points[1].previousControl == CGPoint(x: 40, y: 25))
+    }
+
+    @Test func closedAnchorClickDoesNotCreateNewDraftOrHistory() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 50, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 30, y: 40))
+        session.endPenDrag()
+        session.closePen()
+
+        let undoCount = session.history.undoCount
+        let layerCount = session.document?.layers.count ?? 0
+        let layerID = session.activeLayerID!
+
+        let docSize = session.document!.size
+        let anchorView = session.viewport.viewPoint(from: CGPoint(x: 50, y: 10), documentSize: docSize)
+        guard let anchorHit = session.hitTestPenClosedAnchor(at: anchorView) else {
+            Issue.record("Anchor hit expected")
+            return
+        }
+
+        #expect(anchorHit.anchorIndex.anchorIndex == 1)
+
+        // Simulate click
+        session.selectLayer(anchorHit.layerID)
+
+        #expect(session.activeLayerID == layerID)
+        #expect(session.penDraft == nil)
+        #expect(session.document?.layers.count == layerCount)
+        #expect(session.history.undoCount == undoCount)
     }
 }

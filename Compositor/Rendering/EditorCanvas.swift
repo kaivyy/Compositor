@@ -1290,6 +1290,12 @@ final class CanvasView: NSView {
             session.clearDirectSelectionHover()
             synchronizeDisplay()
         }
+        if session.tool == .pen {
+            session.penHoverEndpoint = nil
+            session.penHoverAnchor = nil
+            session.penHoverVectorLayer = nil
+            synchronizeDisplay()
+        }
         // Tools set their cursor directly while over the canvas, so put the arrow back on the
         // way out. A drag keeps its cursor until mouse-up.
         if NSEvent.pressedMouseButtons == 0 { NSCursor.arrow.set() }
@@ -1314,7 +1320,28 @@ final class CanvasView: NSView {
         if session.tool == .pen, let document = session.document {
             let point = convert(event.locationInWindow, from: nil)
             let docPoint = session.viewport.documentPoint(from: point, documentSize: document.size)
-            session.movePen(to: docPoint)
+            if session.penDraft == nil {
+                let endpointHit = session.hitTestPenEndpoint(at: point)
+                session.penHoverEndpoint = endpointHit
+                if endpointHit != nil {
+                    session.penHoverAnchor = nil
+                    session.penHoverVectorLayer = nil
+                } else if let closedAnchorHit = session.hitTestPenClosedAnchor(at: point) {
+                    session.penHoverAnchor = closedAnchorHit
+                    session.penHoverVectorLayer = PenVectorLayerHit(layerID: closedAnchorHit.layerID)
+                } else if let vectorHit = session.hitTestPenVectorLayer(at: point) {
+                    session.penHoverAnchor = nil
+                    session.penHoverVectorLayer = vectorHit
+                } else {
+                    session.penHoverAnchor = nil
+                    session.penHoverVectorLayer = nil
+                }
+            } else {
+                session.penHoverEndpoint = nil
+                session.penHoverAnchor = nil
+                session.penHoverVectorLayer = nil
+                session.movePen(to: docPoint)
+            }
             synchronizeDisplay()
             return
         }
@@ -1433,6 +1460,11 @@ final class CanvasView: NSView {
             synchronizeDisplay()
             return vectorContextMenu(for: target)
         }
+        if session.tool == .pen {
+            let m = penContextMenu(at: point)
+            synchronizeDisplay()
+            return m
+        }
         return super.menu(for: event)
     }
 
@@ -1451,6 +1483,13 @@ final class CanvasView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        if session.tool == .pen {
+            let point = convert(event.locationInWindow, from: nil)
+            if let menu = penContextMenu(at: point) {
+                NSMenu.popUpContextMenu(menu, with: event, for: self)
+            }
+            return
+        }
         guard session.tool.isBrushTool, session.brushStroke == nil, session.warpStroke == nil, !spaceHeld else {
             if !spaceHeld, let menu = menu(for: event) {
                 NSMenu.popUpContextMenu(menu, with: event, for: self)
@@ -1487,7 +1526,7 @@ final class CanvasView: NSView {
         updateBrushCursor()
     }
     override func mouseDown(with event: NSEvent) {
-        if session.tool == .directSelection, event.modifierFlags.contains(.control) {
+        if (session.tool == .directSelection || session.tool == .pen), event.modifierFlags.contains(.control) {
             rightMouseDown(with: event)
             return
         }
@@ -2103,6 +2142,35 @@ final class CanvasView: NSView {
 
     private func penMouseDown(at point: CGPoint, event: NSEvent) {
         guard let document = session.document else { return }
+        // If no active draft, check for endpoint continuation on a committed vector layer.
+        if session.penDraft == nil {
+            if let hit = session.hitTestPenEndpoint(at: point) {
+                session.penHoverEndpoint = nil
+                session.penHoverAnchor = nil
+                session.penHoverVectorLayer = nil
+                session.beginPenContinuation(from: hit)
+                synchronizeDisplay()
+                return
+            }
+            // If click hits a closed anchor, activate the layer
+            if let anchorHit = session.hitTestPenClosedAnchor(at: point) {
+                session.penHoverEndpoint = nil
+                session.penHoverAnchor = anchorHit
+                session.penHoverVectorLayer = PenVectorLayerHit(layerID: anchorHit.layerID)
+                session.selectLayer(anchorHit.layerID)
+                synchronizeDisplay()
+                return
+            }
+            // If click hits an existing committed vector layer (such as a closed path), activate it instead of drafting over it
+            if let vectorHit = session.hitTestPenVectorLayer(at: point) {
+                session.penHoverEndpoint = nil
+                session.penHoverAnchor = nil
+                session.penHoverVectorLayer = nil
+                session.selectLayer(vectorHit.layerID)
+                synchronizeDisplay()
+                return
+            }
+        }
         if let draft = session.penDraft, draft.subpath.points.count >= 2 {
             let firstAnchorDoc = draft.subpath.points[0].anchor
             let firstAnchorView = session.viewport.viewPoint(from: firstAnchorDoc, documentSize: document.size)
@@ -2112,8 +2180,92 @@ final class CanvasView: NSView {
                 return
             }
         }
+        session.penHoverEndpoint = nil
+        session.penHoverAnchor = nil
+        session.penHoverVectorLayer = nil
         let docPoint = session.viewport.documentPoint(from: point, documentSize: document.size)
         session.beginPen(at: docPoint)
+        synchronizeDisplay()
+    }
+
+    private func penContextMenu(at point: CGPoint? = nil) -> NSMenu? {
+        let menu = NSMenu()
+        if let draft = session.penDraft {
+            if draft.subpath.points.count >= 2 {
+                let finishItem = NSMenuItem(title: "Finish Path", action: #selector(finishPenPath(_:)), keyEquivalent: "")
+                finishItem.target = self
+                menu.addItem(finishItem)
+
+                let closeItem = NSMenuItem(title: "Close Path", action: #selector(closePenPath(_:)), keyEquivalent: "")
+                closeItem.target = self
+                menu.addItem(closeItem)
+            }
+            menu.addItem(.separator())
+            let cancelItem = NSMenuItem(title: "Cancel Path", action: #selector(cancelPenPath(_:)), keyEquivalent: "")
+            cancelItem.target = self
+            menu.addItem(cancelItem)
+            return menu.items.isEmpty ? nil : menu
+        }
+
+        // When no active draft, check if right-click hit a closed anchor or committed vector layer
+        guard let point else { return nil }
+        let targetLayerID: UUID?
+        if let anchorHit = session.hitTestPenClosedAnchor(at: point) {
+            targetLayerID = anchorHit.layerID
+            session.contextualHitTarget = anchorHit
+        } else if let hit = session.hitTestPenVectorLayer(at: point) {
+            targetLayerID = hit.layerID
+        } else {
+            targetLayerID = nil
+        }
+
+        if let layerID = targetLayerID {
+            session.selectLayer(layerID)
+
+            if let document = session.document,
+               let layer = document.layers.first(where: { $0.id == layerID }),
+               let vector = layer.vector {
+                if vector.subpaths.contains(where: \.isClosed) {
+                    let makeSelectionItem = NSMenuItem(title: "Make Selection", action: #selector(makeSelectionFromPenVector(_:)), keyEquivalent: "")
+                    makeSelectionItem.target = self
+                    makeSelectionItem.representedObject = layerID
+                    menu.addItem(makeSelectionItem)
+                }
+            }
+
+            if session.selection != nil {
+                let deselectItem = NSMenuItem(title: "Deselect", action: #selector(deselectDocumentSelection(_:)), keyEquivalent: "")
+                deselectItem.target = self
+                menu.addItem(deselectItem)
+            }
+        }
+
+        return menu.items.isEmpty ? nil : menu
+    }
+
+    @objc private func makeSelectionFromPenVector(_ sender: NSMenuItem) {
+        guard let layerID = sender.representedObject as? UUID else { return }
+        session.makeSelectionFromVector(layerID: layerID)
+        synchronizeDisplay()
+    }
+
+    @objc private func deselectDocumentSelection(_ sender: Any?) {
+        session.deselect()
+        synchronizeDisplay()
+    }
+
+    @objc private func finishPenPath(_ sender: Any?) {
+        session.finishPen()
+        synchronizeDisplay()
+    }
+
+    @objc private func closePenPath(_ sender: Any?) {
+        session.closePen()
+        synchronizeDisplay()
+    }
+
+    @objc private func cancelPenPath(_ sender: Any?) {
+        session.cancelPen()
         synchronizeDisplay()
     }
 
