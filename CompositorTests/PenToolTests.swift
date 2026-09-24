@@ -1348,4 +1348,338 @@ struct PenToolTests {
         #expect(session.document?.layers.count == layerCount)
         #expect(session.history.undoCount == undoCount)
     }
+
+    // MARK: - Phase 2B-9 Tests
+
+    private func hasNonZeroPixels(_ image: CGImage) -> Bool {
+        guard let data = image.dataProvider?.data,
+              let ptr = CFDataGetBytePtr(data) else { return false }
+        let length = CFDataGetLength(data)
+        for i in 0 ..< length {
+            if ptr[i] != 0 { return true }
+        }
+        return false
+    }
+
+    // 1. Make Selection preserves VectorModel, anchors, handles, closed state, and creates exactly one history step
+    @Test func makeSelectionPreservesVectorModelAnchorsAndHandles() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.dragPen(to: CGPoint(x: 20, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 10))
+        session.dragPen(to: CGPoint(x: 60, y: 30))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 40, y: 60))
+        session.endPenDrag()
+        session.closePen()
+
+        let layerID = session.activeLayerID!
+        let layerIndex = session.document!.layers.firstIndex(where: { $0.id == layerID })!
+        let originalVector = session.document!.layers[layerIndex].vector!
+        let originalLayerCount = session.document!.layers.count
+        let undoBefore = session.history.undoCount
+
+        session.makeSelectionFromVector(layerID: layerID)
+
+        #expect(session.document?.selection != nil)
+        #expect(session.document?.selection?.isEmpty == false)
+        #expect(session.history.undoCount == undoBefore + 1)
+        #expect(session.document?.layers.count == originalLayerCount)
+
+        let currentLayer = session.document!.layers[layerIndex]
+        #expect(currentLayer.id == layerID)
+        #expect(currentLayer.vector == originalVector)
+        #expect(currentLayer.vector?.subpaths[0].isClosed == true)
+        #expect(currentLayer.vector?.subpaths[0].points.count == 3)
+        #expect(currentLayer.vector?.subpaths[0].points[0].nextControl != nil)
+    }
+
+    // 2. Fill Path fills closed path, uses foreground color, preserves VectorModel, and supports undo/redo
+    @Test func fillPathFillsClosedPathAndSupportsUndoRedo() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 1, green: 0, blue: 0) // Red
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 80, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 50, y: 80))
+        session.endPenDrag()
+        session.closePen()
+
+        let layerID = session.activeLayerID!
+        let layerIndex = session.document!.layers.firstIndex(where: { $0.id == layerID })!
+        let originalVector = session.document!.layers[layerIndex].vector!
+
+        // Before fill: transparent image
+        #expect(!hasNonZeroPixels(session.document!.layers[layerIndex].asset!.image))
+
+        let undoBefore = session.history.undoCount
+        session.fillPathFromVector(layerID: layerID)
+
+        #expect(session.history.undoCount == undoBefore + 1)
+        #expect(hasNonZeroPixels(session.document!.layers[layerIndex].asset!.image))
+        #expect(session.document!.layers[layerIndex].vector == originalVector)
+
+        // Undo restores transparent image
+        session.undo()
+        #expect(!hasNonZeroPixels(session.document!.layers[layerIndex].asset!.image))
+        #expect(session.document!.layers[layerIndex].vector == originalVector)
+
+        // Redo restores filled image
+        session.redo()
+        #expect(hasNonZeroPixels(session.document!.layers[layerIndex].asset!.image))
+        #expect(session.document!.layers[layerIndex].vector == originalVector)
+    }
+
+    // 3. Fill Path ignores open subpaths
+    @Test func fillPathIgnoresOpenSubpaths() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 50, y: 50))
+        session.endPenDrag()
+        session.finishPen()
+
+        let layerID = session.activeLayerID!
+        let layerIndex = session.document!.layers.firstIndex(where: { $0.id == layerID })!
+        let undoBefore = session.history.undoCount
+
+        session.fillPathFromVector(layerID: layerID)
+
+        #expect(session.history.undoCount == undoBefore)
+        #expect(!hasNonZeroPixels(session.document!.layers[layerIndex].asset!.image))
+    }
+
+    // 4. Fill Path with multiple subpaths fills closed subpaths and ignores open subpath
+    @Test func fillPathFillsMultipleClosedSubpathsAndIgnoresOpenSubpaths() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 0, green: 1, blue: 0)
+
+        let closedSubpath1 = VectorSubpath(points: [
+            VectorPoint(anchor: CGPoint(x: 10, y: 10)),
+            VectorPoint(anchor: CGPoint(x: 40, y: 10)),
+            VectorPoint(anchor: CGPoint(x: 40, y: 40)),
+            VectorPoint(anchor: CGPoint(x: 10, y: 40))
+        ], isClosed: true)
+
+        let closedSubpath2 = VectorSubpath(points: [
+            VectorPoint(anchor: CGPoint(x: 50, y: 10)),
+            VectorPoint(anchor: CGPoint(x: 80, y: 10)),
+            VectorPoint(anchor: CGPoint(x: 80, y: 40)),
+            VectorPoint(anchor: CGPoint(x: 50, y: 40))
+        ], isClosed: true)
+
+        let openSubpath = VectorSubpath(points: [
+            VectorPoint(anchor: CGPoint(x: 10, y: 60)),
+            VectorPoint(anchor: CGPoint(x: 80, y: 60))
+        ], isClosed: false)
+
+        let model = VectorModel(
+            subpaths: [closedSubpath1, closedSubpath2, openSubpath],
+            fill: VectorFillStyle(color: PaletteColor(red: 0, green: 1, blue: 0), fillRule: .evenOdd, isEnabled: true)
+        )
+
+        let layer = ImageLayer(
+            id: UUID(),
+            asset: ImportedImage(
+                image: try! BrushRaster.context(width: 100, height: 100, mask: false).makeImage()!,
+                thumbnail: try! BrushRaster.context(width: 10, height: 10, mask: false).makeImage()!,
+                name: "MultiVector"
+            ),
+            name: "MultiVector",
+            isVisible: true,
+            transform: LayerTransform(origin: .zero, size: CGSize(width: 100, height: 100)),
+            vector: model
+        )
+        session.document?.layers.append(layer)
+        session.activeLayerID = layer.id
+
+        session.fillPathFromVector(layerID: layer.id)
+
+        let updated = session.document!.layers.first(where: { $0.id == layer.id })!
+        #expect(hasNonZeroPixels(updated.asset!.image))
+        #expect(updated.vector?.subpaths.count == 3)
+        #expect(updated.vector?.subpaths[0].isClosed == true)
+        #expect(updated.vector?.subpaths[1].isClosed == true)
+        #expect(updated.vector?.subpaths[2].isClosed == false)
+    }
+
+    // 5. Stroke Path strokes open path, uses foreground color, preserves VectorModel, and supports undo/redo
+    @Test func strokePathStrokesOpenPathAndSupportsUndoRedo() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 0, green: 0, blue: 1) // Blue
+        session.penStrokeWidth = 3
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 50, y: 30))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 90, y: 20))
+        session.endPenDrag()
+        session.finishPen()
+
+        let layerID = session.activeLayerID!
+        let layerIndex = session.document!.layers.firstIndex(where: { $0.id == layerID })!
+        let originalVector = session.document!.layers[layerIndex].vector!
+
+        #expect(!hasNonZeroPixels(session.document!.layers[layerIndex].asset!.image))
+
+        let undoBefore = session.history.undoCount
+        session.strokePathFromVector(layerID: layerID)
+
+        #expect(session.history.undoCount == undoBefore + 1)
+        #expect(hasNonZeroPixels(session.document!.layers[layerIndex].asset!.image))
+        #expect(session.document!.layers[layerIndex].vector == originalVector)
+        #expect(session.document!.layers[layerIndex].vector?.subpaths[0].isClosed == false)
+
+        session.undo()
+        #expect(!hasNonZeroPixels(session.document!.layers[layerIndex].asset!.image))
+        #expect(session.document!.layers[layerIndex].vector == originalVector)
+
+        session.redo()
+        #expect(hasNonZeroPixels(session.document!.layers[layerIndex].asset!.image))
+        #expect(session.document!.layers[layerIndex].vector == originalVector)
+    }
+
+    // 6. Stroke Path strokes closed path and multiple subpaths
+    @Test func strokePathStrokesClosedPathAndMultipleSubpaths() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 1, green: 1, blue: 0)
+
+        let closedSubpath = VectorSubpath(points: [
+            VectorPoint(anchor: CGPoint(x: 10, y: 10)),
+            VectorPoint(anchor: CGPoint(x: 40, y: 10)),
+            VectorPoint(anchor: CGPoint(x: 40, y: 40))
+        ], isClosed: true)
+
+        let openSubpath = VectorSubpath(points: [
+            VectorPoint(anchor: CGPoint(x: 50, y: 50)),
+            VectorPoint(anchor: CGPoint(x: 80, y: 80))
+        ], isClosed: false)
+
+        let model = VectorModel(
+            subpaths: [closedSubpath, openSubpath],
+            stroke: VectorStrokeStyle(color: PaletteColor(red: 1, green: 1, blue: 0), width: 4, lineCap: .square, lineJoin: .miter, miterLimit: 5, isEnabled: true)
+        )
+
+        let layer = ImageLayer(
+            id: UUID(),
+            asset: ImportedImage(
+                image: try! BrushRaster.context(width: 100, height: 100, mask: false).makeImage()!,
+                thumbnail: try! BrushRaster.context(width: 10, height: 10, mask: false).makeImage()!,
+                name: "StrokeMulti"
+            ),
+            name: "StrokeMulti",
+            isVisible: true,
+            transform: LayerTransform(origin: .zero, size: CGSize(width: 100, height: 100)),
+            vector: model
+        )
+        session.document?.layers.append(layer)
+        session.activeLayerID = layer.id
+
+        session.strokePathFromVector(layerID: layer.id)
+
+        let updated = session.document!.layers.first(where: { $0.id == layer.id })!
+        #expect(hasNonZeroPixels(updated.asset!.image))
+        #expect(updated.vector?.subpaths.count == 2)
+        #expect(updated.vector?.stroke?.width == 4)
+    }
+
+    // 7. Path and Selection separation through tool switching (P -> V -> P)
+    @Test func pathAndSelectionSeparationThroughToolSwitching() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 40, y: 60))
+        session.endPenDrag()
+        session.closePen()
+
+        let layerID = session.activeLayerID!
+        let layerIndex = session.document!.layers.firstIndex(where: { $0.id == layerID })!
+        let originalVector = session.document!.layers[layerIndex].vector!
+
+        session.makeSelectionFromVector(layerID: layerID)
+        #expect(session.document?.selection != nil)
+
+        // Switch to Move (V)
+        session.selectTool(.move)
+        #expect(session.tool == .move)
+        #expect(session.document?.selection != nil)
+        #expect(session.document?.layers[layerIndex].vector == originalVector)
+
+        // Switch back to Pen (P)
+        session.selectTool(.pen)
+        #expect(session.tool == .pen)
+        #expect(session.document?.selection != nil)
+        #expect(session.document?.layers[layerIndex].vector == originalVector)
+
+        // Anchors remain discoverable in Pen
+        let anchorView = session.viewport.viewPoint(from: CGPoint(x: 20, y: 20), documentSize: session.document!.size)
+        let anchorHit = session.hitTestPenClosedAnchor(at: anchorView)
+        #expect(anchorHit != nil)
+        #expect(anchorHit?.layerID == layerID)
+    }
+
+    // 8. Transformed vector layer fills and strokes correctly
+    @Test func fillAndStrokeWithTransformedVectorLayer() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 50, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 30, y: 40))
+        session.endPenDrag()
+        session.closePen()
+
+        let layerID = session.activeLayerID!
+        let layerIndex = session.document!.layers.firstIndex(where: { $0.id == layerID })!
+
+        // Apply a transform: rotate and translate
+        var transform = session.document!.layers[layerIndex].transform
+        transform.origin = CGPoint(x: 100, y: 100)
+        transform.rotation = 45
+        session.document!.layers[layerIndex].transform = transform
+
+        let originalVector = session.document!.layers[layerIndex].vector!
+
+        session.fillPathFromVector(layerID: layerID)
+        #expect(hasNonZeroPixels(session.document!.layers[layerIndex].asset!.image))
+        #expect(session.document!.layers[layerIndex].vector == originalVector)
+        #expect(session.document!.layers[layerIndex].transform.origin == CGPoint(x: 100, y: 100))
+        #expect(session.document!.layers[layerIndex].transform.rotation == 45)
+
+        session.strokePathFromVector(layerID: layerID)
+        #expect(hasNonZeroPixels(session.document!.layers[layerIndex].asset!.image))
+        #expect(session.document!.layers[layerIndex].vector == originalVector)
+    }
+
+    // 9. Persistence round-trip retains vector model, closed state, and painted raster pixels
+    @Test func fillAndStrokePersistenceRoundTrip() throws {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 15, y: 15))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 55, y: 15))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 35, y: 55))
+        session.endPenDrag()
+        session.closePen()
+
+        let layerID = session.activeLayerID!
+        session.fillPathFromVector(layerID: layerID)
+
+        let layerIndex = session.document!.layers.firstIndex(where: { $0.id == layerID })!
+        let vector = session.document!.layers[layerIndex].vector!
+        let image = session.document!.layers[layerIndex].asset!.image
+
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(vector)
+        let decoder = JSONDecoder()
+        let decodedVector = try decoder.decode(VectorModel.self, from: data)
+
+        #expect(decodedVector == vector)
+        #expect(decodedVector.subpaths[0].isClosed == true)
+        #expect(hasNonZeroPixels(image))
+    }
 }

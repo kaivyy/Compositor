@@ -378,6 +378,130 @@ extension EditorSession {
         applySelection(docPath, mode: .replace, name: "Make Selection")
     }
 
+    /// Fills the closed subpaths of the specified vector layer using the current foreground color,
+    /// painting directly into the layer's raster asset in document coordinates while preserving the VectorModel.
+    func fillPathFromVector(layerID: UUID) {
+        guard let document, canEditLayers,
+              let index = document.layers.firstIndex(where: { $0.id == layerID }),
+              let vector = document.layers[index].vector else { return }
+
+        let closedSubpaths = vector.subpaths.filter(\.isClosed)
+        guard !closedSubpaths.isEmpty else { return }
+
+        let closedModel = VectorModel(subpaths: closedSubpaths, fill: vector.fill, stroke: nil)
+        let localPath = VectorBridge.cgPath(from: closedModel)
+        let fillRule = vector.fill?.fillRule.cgFillRule ?? .winding
+        let fillColor = foregroundColor.cgColor
+
+        paintIntoVectorLayer(at: index, name: "Fill Path", localPath: localPath) { context, path in
+            context.setFillColor(fillColor)
+            context.addPath(path)
+            context.fillPath(using: fillRule)
+        }
+    }
+
+    /// Strokes the subpaths of the specified vector layer using the current foreground color and stroke settings,
+    /// painting directly into the layer's raster asset in document coordinates while preserving the VectorModel.
+    func strokePathFromVector(layerID: UUID) {
+        guard let document, canEditLayers,
+              let index = document.layers.firstIndex(where: { $0.id == layerID }),
+              let vector = document.layers[index].vector else { return }
+
+        let validSubpaths = vector.subpaths.filter { $0.points.count >= 2 }
+        guard !validSubpaths.isEmpty else { return }
+
+        let strokeModel = VectorModel(subpaths: validSubpaths, fill: nil, stroke: vector.stroke)
+        let localPath = VectorBridge.cgPath(from: strokeModel)
+
+        let strokeWidth = (vector.stroke?.isEnabled == true) ? (vector.stroke?.width ?? CGFloat(penStrokeWidth)) : CGFloat(penStrokeWidth)
+        let lineCap = vector.stroke?.lineCap.cgCap ?? .round
+        let lineJoin = vector.stroke?.lineJoin.cgJoin ?? .round
+        let miterLimit = vector.stroke?.miterLimit ?? 10
+        let strokeColor = foregroundColor.cgColor
+
+        paintIntoVectorLayer(at: index, name: "Stroke Path", localPath: localPath) { context, path in
+            context.setLineWidth(strokeWidth)
+            context.setLineCap(lineCap)
+            context.setLineJoin(lineJoin)
+            context.setMiterLimit(miterLimit)
+            context.setStrokeColor(strokeColor)
+            context.addPath(path)
+            context.strokePath()
+        }
+    }
+
+    private func paintIntoVectorLayer(
+        at index: Int,
+        name: String,
+        localPath: CGPath,
+        _ draw: (CGContext, CGPath) -> Void
+    ) {
+        guard let document, index < document.layers.count else { return }
+        let layer = document.layers[index]
+        guard let vector = layer.vector else { return }
+
+        let width = max(1, Int(layer.transform.size.width.rounded()))
+        let height = max(1, Int(layer.transform.size.height.rounded()))
+
+        guard width * height <= EditorSession.maxShapePixels else {
+            brushError = ProjectError.tooLarge.localizedDescription
+            return
+        }
+
+        do {
+            let context = try BrushRaster.context(width: width, height: height, mask: false)
+            context.setShouldAntialias(true)
+
+            // 1. Draw existing image if present
+            if let existing = layer.asset?.image {
+                BrushRaster.draw(existing, in: CGRect(x: 0, y: 0, width: width, height: height), mask: false, context: context)
+            }
+
+            // 2. Prepare coordinate mapping and selection clipping
+            let docToLayer = layer.transform.documentToLayer ?? .identity
+            var layerToDoc = layer.transform.layerToDocument
+            let docPath = localPath.copy(using: &layerToDoc) ?? localPath
+
+            // 3. Apply selection clip if active
+            if let selection = document.selection {
+                if selection.isEmpty {
+                    // Empty selection clips away all painting ("touch nothing")
+                    return
+                }
+                let clip = try selection.clip(canvas: document.size)
+                guard let coverage = clip.coverage, !clip.rect.isEmpty else {
+                    return
+                }
+                context.saveGState()
+                context.concatenate(docToLayer)
+                clip.apply(to: context)
+                draw(context, docPath)
+                context.restoreGState()
+            } else {
+                // No selection: draw directly in layer-local coordinates
+                context.saveGState()
+                draw(context, localPath)
+                context.restoreGState()
+            }
+
+            guard let newImage = context.makeImage() else {
+                throw ExportError.render
+            }
+            let thumbnail = try PixelInvert.thumbnail(of: newImage)
+            let assetName = layer.asset?.name ?? layer.name
+
+            finishOpacityEdit()
+            beginEdit(name)
+            self.document?.layers[index].asset = ImportedImage(image: newImage, thumbnail: thumbnail, name: assetName)
+            self.document?.layers[index].vector = vector
+            self.document?.layers[index].transform = layer.transform
+            endEdit()
+            brushRevision += 1
+        } catch {
+            brushError = error.localizedDescription
+        }
+    }
+
     /// Begins continuing an existing vector layer's open subpath from `hit`.
     /// The draft's subpath is loaded in document coordinates so new anchors land correctly.
     func beginPenContinuation(from hit: PenEndpointHit) {

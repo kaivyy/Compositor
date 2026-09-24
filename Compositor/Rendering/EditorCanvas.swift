@@ -2225,15 +2225,33 @@ final class CanvasView: NSView {
             if let document = session.document,
                let layer = document.layers.first(where: { $0.id == layerID }),
                let vector = layer.vector {
-                if vector.subpaths.contains(where: \.isClosed) {
+                let hasClosedSubpaths = vector.subpaths.contains(where: \.isClosed)
+                let hasValidSubpaths = vector.subpaths.contains(where: { $0.points.count >= 2 })
+
+                if hasClosedSubpaths {
                     let makeSelectionItem = NSMenuItem(title: "Make Selection", action: #selector(makeSelectionFromPenVector(_:)), keyEquivalent: "")
                     makeSelectionItem.target = self
                     makeSelectionItem.representedObject = layerID
                     menu.addItem(makeSelectionItem)
+
+                    let fillPathItem = NSMenuItem(title: "Fill Path", action: #selector(fillPathFromPenVector(_:)), keyEquivalent: "")
+                    fillPathItem.target = self
+                    fillPathItem.representedObject = layerID
+                    menu.addItem(fillPathItem)
+                }
+
+                if hasValidSubpaths {
+                    let strokePathItem = NSMenuItem(title: "Stroke Path", action: #selector(strokePathFromPenVector(_:)), keyEquivalent: "")
+                    strokePathItem.target = self
+                    strokePathItem.representedObject = layerID
+                    menu.addItem(strokePathItem)
                 }
             }
 
             if session.selection != nil {
+                if !menu.items.isEmpty {
+                    menu.addItem(.separator())
+                }
                 let deselectItem = NSMenuItem(title: "Deselect", action: #selector(deselectDocumentSelection(_:)), keyEquivalent: "")
                 deselectItem.target = self
                 menu.addItem(deselectItem)
@@ -2246,6 +2264,18 @@ final class CanvasView: NSView {
     @objc private func makeSelectionFromPenVector(_ sender: NSMenuItem) {
         guard let layerID = sender.representedObject as? UUID else { return }
         session.makeSelectionFromVector(layerID: layerID)
+        synchronizeDisplay()
+    }
+
+    @objc private func fillPathFromPenVector(_ sender: NSMenuItem) {
+        guard let layerID = sender.representedObject as? UUID else { return }
+        session.fillPathFromVector(layerID: layerID)
+        synchronizeDisplay()
+    }
+
+    @objc private func strokePathFromPenVector(_ sender: NSMenuItem) {
+        guard let layerID = sender.representedObject as? UUID else { return }
+        session.strokePathFromVector(layerID: layerID)
         synchronizeDisplay()
     }
 
