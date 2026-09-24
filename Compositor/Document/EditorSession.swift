@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ImageLayer: Identifiable, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -85,7 +86,7 @@ struct CanvasDocument: Equatable {
     // Geometry limit; raster memory limits will be established with image import.
     static func validDimension(_ value: String) -> Int? {
         guard let n = Int(value.trimmingCharacters(in: .whitespaces)),
-              (1...30_000).contains(n) else { return nil }
+              (1...DocumentLimits.maxSide).contains(n) else { return nil }
         return n
     }
 }
@@ -785,8 +786,8 @@ final class EditorSession {
                 } ?? 0
                 if RawImporter.matches(url) {
                     guard let size = RawImporter.pixelSize(url) else { throw ImageImportError.unreadable }
-                    guard size.width <= 30_000, size.height <= 30_000,
-                          size.width * size.height <= 100_000_000 - usedPixels else { throw ImageImportError.tooLarge }
+                    guard size.width <= DocumentLimits.maxSide, size.height <= DocumentLimits.maxSide,
+                          size.width * size.height <= DocumentLimits.documentPixelBudget - usedPixels else { throw ImageImportError.tooLarge }
                     guard let settings = await developRaw(url) else { continue }
                     // Seconds of work: off the main actor, or pressing Import freezes the window.
                     guard let developed = await RawImporter.Queue.shared.develop(url, settings: settings, limit: nil)
@@ -794,11 +795,24 @@ final class EditorSession {
                     let thumbnail = try PixelAdjust.thumbnail(of: developed)
                     insert(ImportedImage(image: developed, thumbnail: thumbnail,
                                          name: url.deletingPathExtension().lastPathComponent), centeredAt: point)
+                } else if UTType(filenameExtension: url.pathExtension)?.conforms(to: .svg) == true {
+                    let asset = try await ImageImporter.shared.decodeSVG(url, fitting: document?.size,
+                                                                         remainingPixels: DocumentLimits.documentPixelBudget - usedPixels)
+                    insert(asset, centeredAt: point)
                 } else if PSDReader.matches(url) {
                     beginPSDReading(title: "Open “\(url.lastPathComponent)”?", confirmTitle: "Import")
                     let imported: PSDImport
                     do {
-                        let parsed = try await ImageImporter.shared.loadPhotoshop(url, remainingPixels: 100_000_000 - usedPixels)
+                        let parsed = try await ImageImporter.shared.loadPhotoshop(url, remainingPixels: DocumentLimits.documentPixelBudget - usedPixels)
+                        // Only a background: Photoshop writes no layer records, just the merged image, so that is
+                        // what comes in, as one layer.
+                        if parsed.layers.isEmpty {
+                            endPSDReading()
+                            let asset = try await ImageImporter.shared.decode(url, remainingPixels: DocumentLimits.documentPixelBudget - usedPixels,
+                                                                              flattenedPhotoshop: true)
+                            insert(asset, centeredAt: point)
+                            continue
+                        }
                         let assets = try await ImageImporter.shared.photoshopAssets(parsed)
                         imported = try PSDDocumentBuilder.makeImport(parsed, assets: assets)
                     } catch {
@@ -808,7 +822,7 @@ final class EditorSession {
                     if !(await finishPSDReading(imported.conversions)) { continue }
                     try insertPhotoshop(imported, named: url.deletingPathExtension().lastPathComponent, centeredAt: point)
                 } else {
-                    let asset = try await ImageImporter.shared.decode(url, remainingPixels: 100_000_000 - usedPixels)
+                    let asset = try await ImageImporter.shared.decode(url, remainingPixels: DocumentLimits.documentPixelBudget - usedPixels)
                     insert(asset, centeredAt: point)
                 }
             } catch {
@@ -924,7 +938,7 @@ final class EditorSession {
 
     /// `emptyLayer` starts the canvas with a selected blank "Layer 1", as File > New does.
     func createDocument(width: Int, height: Int, emptyLayer: Bool = false) {
-        guard !isProjectBusy, !isImporting, (1...30_000).contains(width), (1...30_000).contains(height) else { return }
+        guard !isProjectBusy, !isImporting, (1...DocumentLimits.maxSide).contains(width), (1...DocumentLimits.maxSide).contains(height) else { return }
         commitTransform()
         beginEdit("New Canvas")
         defer { endEdit() }

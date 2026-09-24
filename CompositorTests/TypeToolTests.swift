@@ -15,6 +15,12 @@ struct TypeToolTests {
         let session = makeSession()
         let before = session.history.undoCount
         session.beginText(at: CGPoint(x: 30, y: 40))
+        // A click starts the first letter on the pointer: the box sits its padding to the left and its first
+        // baseline's height above.
+        let start = try #require(session.textDraft)
+        let style = start.style
+        let descent = abs((EditorSession.textAttributes(style)[.font] as? NSFont)?.descender ?? 0)
+        #expect(start.origin == CGPoint(x: 30 - LayerTextStyle.padding, y: 40 - (LayerTextStyle.padding + style.lineHeight - descent)))
         session.textDraft?.style.content = "Text"
         #expect(session.document?.layers.count == 1)
         var draft = try #require(session.textDraft)
@@ -22,7 +28,7 @@ struct TypeToolTests {
         draft.style.fontSize = 48
         #expect(session.applyText(draft))
         #expect(session.activeLayer?.liveText?.style == draft.style)
-        #expect(session.activeLayer?.origin == CGPoint(x: 30, y: 40))
+        #expect(session.activeLayer?.origin == start.origin)
         #expect(session.history.undoCount == before + 1)
         session.editActiveText()
         session.textDraft = nil
@@ -130,6 +136,8 @@ struct TypeToolTests {
     @Test func clippingToTextExportsColoredGlyphsOnTransparency() async throws {
         let session = makeSession()
         session.beginText(at: .zero)
+        // The box on the canvas's corner, where the clipped fill below is placed.
+        session.textDraft?.origin = .zero
         session.textDraft?.style.content = "Text"
         #expect(session.applyText(try #require(session.textDraft)))
         let source = try #require(session.activeLayerID)
