@@ -408,6 +408,18 @@ final class TransformOverlay: NSView {
                 }
             }
 
+            if draft.isClosingCandidate {
+                let last = points[points.count - 1]
+                let first = points[0]
+                if last.nextControl == nil && first.previousControl == nil {
+                    path.addLine(to: firstView)
+                } else {
+                    let c1 = (last.nextControl ?? last.anchor).applying(transform)
+                    let c2 = (first.previousControl ?? first.anchor).applying(transform)
+                    path.addCurve(to: firstView, control1: c1, control2: c2)
+                }
+            }
+
             // Dark shadow/outline for contrast
             context.addPath(path)
             context.setStrokeColor(NSColor.black.withAlphaComponent(0.6).cgColor)
@@ -426,7 +438,7 @@ final class TransformOverlay: NSView {
         }
 
         // 2. Draw live preview segment from last anchor to pointer
-        if !draft.isDragging, let pointer = draft.pointer, let last = points.last {
+        if !draft.isDragging && !draft.isClosingCandidate, let pointer = draft.pointer, let last = points.last {
             let lastView = last.anchor.applying(transform)
             let pointerView = pointer.applying(transform)
 
@@ -485,8 +497,8 @@ final class TransformOverlay: NSView {
         // 4. Draw anchors
         // Check if pointer is hovering close to initial anchor for closing
         let firstView = points[0].anchor.applying(transform)
-        var hoveringFirst = false
-        if points.count >= 2, let pointer = draft.pointer {
+        var hoveringFirst = draft.isClosingCandidate
+        if !hoveringFirst, points.count >= 2, let pointer = draft.pointer {
             let pointerView = pointer.applying(transform)
             hoveringFirst = hypot(firstView.x - pointerView.x, firstView.y - pointerView.y) <= 10.0
         }
@@ -543,6 +555,7 @@ final class TransformOverlay: NSView {
                 context.addPath(viewPath)
                 context.setStrokeColor(NSColor.controlAccentColor.cgColor)
                 context.setLineWidth(1)
+                context.setLineDash(phase: 0, lengths: [4, 4])
                 context.strokePath()
                 context.restoreGState()
             }

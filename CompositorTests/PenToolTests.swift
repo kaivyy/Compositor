@@ -1852,4 +1852,696 @@ struct PenToolTests {
         #expect(anchorHit?.layerID == layerID)
         #expect(anchorHit?.anchorIndex.anchorIndex == 0)
     }
+
+    // MARK: - Phase 2B-9.2 Fidelity Audit Helpers & Tests
+
+    private func pixelData(of image: CGImage) -> (bytes: [UInt8], width: Int, height: Int)? {
+        let width = image.width
+        let height = image.height
+        guard width > 0, height > 0 else { return nil }
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: &bytes,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+              ) else { return nil }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return (bytes, width, height)
+    }
+
+    private func paintedBounds(in image: CGImage, alphaThreshold: UInt8 = 10) -> CGRect? {
+        guard let (bytes, width, height) = pixelData(of: image) else { return nil }
+        var minX = width
+        var maxX = -1
+        var minY = height
+        var maxY = -1
+
+        for y in 0 ..< height {
+            for x in 0 ..< width {
+                let alpha = bytes[(y * width + x) * 4 + 3]
+                if alpha >= alphaThreshold {
+                    if x < minX { minX = x }
+                    if x > maxX { maxX = x }
+                    if y < minY { minY = y }
+                    if y > maxY { maxY = y }
+                }
+            }
+        }
+
+        guard maxX >= minX, maxY >= minY else { return nil }
+        return CGRect(x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1)
+    }
+
+    private func pixelAlpha(at point: CGPoint, in layer: ImageLayer) -> UInt8 {
+        guard let image = layer.asset?.image,
+              let (bytes, width, height) = pixelData(of: image) else { return 0 }
+        let docToLayer = layer.transform.documentToLayer ?? .identity
+        let localPoint = point.applying(docToLayer)
+        let lx = Int(localPoint.x.rounded())
+        let ly = Int(localPoint.y.rounded())
+        guard lx >= 0, lx < width, ly >= 0, ly < height else { return 0 }
+        return bytes[(ly * width + lx) * 4 + 3]
+    }
+
+    private func pixelRGBA(at point: CGPoint, in layer: ImageLayer) -> (r: UInt8, g: UInt8, b: UInt8, a: UInt8)? {
+        guard let image = layer.asset?.image,
+              let (bytes, width, height) = pixelData(of: image) else { return nil }
+        let docToLayer = layer.transform.documentToLayer ?? .identity
+        let localPoint = point.applying(docToLayer)
+        let lx = Int(localPoint.x.rounded())
+        let ly = Int(localPoint.y.rounded())
+        guard lx >= 0, lx < width, ly >= 0, ly < height else { return nil }
+        let offset = (ly * width + lx) * 4
+        return (r: bytes[offset], g: bytes[offset + 1], b: bytes[offset + 2], a: bytes[offset + 3])
+    }
+
+    // 14. Phase 9 Test 1: Bounds fidelity
+    @Test func strokePathFidelityBoundsTest() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 1, green: 0, blue: 0)
+        session.penStrokeWidth = 4.0
+
+        // Create horizontal path from (100, 100) to (200, 100)
+        session.beginPen(at: CGPoint(x: 100, y: 100))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 200, y: 100))
+        session.endPenDrag()
+        session.finishPen()
+
+        let layerID = session.activeLayerID!
+        session.strokePathFromVector(layerID: layerID)
+
+        let layer = session.document!.layers.first(where: { $0.id == layerID })!
+        let image = layer.asset!.image
+        let localBounds = paintedBounds(in: image)
+        #expect(localBounds != nil)
+
+        // Document space bounds: expected around (98, 98) to (202, 102) due to width 4 round caps
+        let localToDoc = layer.transform.layerToDocument
+        let docMin = CGPoint(x: localBounds!.minX, y: localBounds!.minY).applying(localToDoc)
+        let docMax = CGPoint(x: localBounds!.maxX, y: localBounds!.maxY).applying(localToDoc)
+
+        #expect(abs(docMin.x - 98) <= 1.5)
+        #expect(abs(docMin.y - 98) <= 1.5)
+        #expect(abs(docMax.x - 202) <= 1.5)
+        #expect(abs(docMax.y - 102) <= 1.5)
+    }
+
+    // 15. Phase 9 Test 2: Centerline alignment
+    @Test func strokePathFidelityCenterlineTest() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 1, green: 0, blue: 0)
+        session.penStrokeWidth = 4.0
+
+        session.beginPen(at: CGPoint(x: 100, y: 100))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 200, y: 100))
+        session.endPenDrag()
+        session.finishPen()
+
+        let layerID = session.activeLayerID!
+        session.strokePathFromVector(layerID: layerID)
+
+        let layer = session.document!.layers.first(where: { $0.id == layerID })!
+
+        // Centerline pixel at midpoint (150, 100) must be fully opaque / high alpha
+        let centerAlpha = pixelAlpha(at: CGPoint(x: 150, y: 100), in: layer)
+        #expect(centerAlpha >= 200)
+
+        // Pixels within stroke radius must be visible
+        let topEdgeAlpha = pixelAlpha(at: CGPoint(x: 150, y: 99), in: layer)
+        let bottomEdgeAlpha = pixelAlpha(at: CGPoint(x: 150, y: 101), in: layer)
+        #expect(topEdgeAlpha >= 150)
+        #expect(bottomEdgeAlpha >= 150)
+
+        // Pixels outside stroke width must be transparent
+        let farTopAlpha = pixelAlpha(at: CGPoint(x: 150, y: 95), in: layer)
+        let farBottomAlpha = pixelAlpha(at: CGPoint(x: 150, y: 105), in: layer)
+        #expect(farTopAlpha == 0)
+        #expect(farBottomAlpha == 0)
+    }
+
+    // 16. Phase 9 Test 3: Stroke width estimation
+    @Test func strokePathFidelityWidthTest() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 0, green: 1, blue: 0)
+        session.penStrokeWidth = 6.0
+
+        session.beginPen(at: CGPoint(x: 100, y: 100))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 200, y: 100))
+        session.endPenDrag()
+        session.finishPen()
+
+        let layerID = session.activeLayerID!
+        session.strokePathFromVector(layerID: layerID)
+
+        let layer = session.document!.layers.first(where: { $0.id == layerID })!
+        let image = layer.asset!.image
+        let (bytes, width, height) = pixelData(of: image)!
+
+        let docToLayer = layer.transform.documentToLayer ?? .identity
+        let localMidX = Int(CGPoint(x: 150, y: 100).applying(docToLayer).x.rounded())
+
+        // Count vertical pixels with alpha >= 30 in this column
+        var strokeThickness = 0
+        for y in 0 ..< height {
+            let alpha = bytes[(y * width + localMidX) * 4 + 3]
+            if alpha >= 30 {
+                strokeThickness += 1
+            }
+        }
+
+        // Expected width is 6, allowing +/- 1 pixel for antialiasing coverage
+        #expect((5...7).contains(strokeThickness))
+    }
+
+    // 17. Phase 9 Test 4: Endpoint and line caps
+    @Test func strokePathFidelityEndpointsAndCapsTest() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 0, green: 0, blue: 1)
+
+        // 1. Butt cap: does not extend past endpoints
+        session.beginPen(at: CGPoint(x: 100, y: 100))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 200, y: 100))
+        session.endPenDrag()
+        session.finishPen()
+
+        let buttLayerID = session.activeLayerID!
+        let buttIndex = session.document!.layers.firstIndex(where: { $0.id == buttLayerID })!
+        if var v = session.document?.layers[buttIndex].vector {
+            v.stroke = VectorStrokeStyle(color: session.foregroundColor, width: 4.0, lineCap: .butt, lineJoin: .round, isEnabled: true)
+            session.document?.layers[buttIndex].vector = v
+        }
+
+        session.strokePathFromVector(layerID: buttLayerID)
+
+        let buttUpdated = session.document!.layers[buttIndex]
+        guard let buttBounds = paintedBounds(in: buttUpdated.asset!.image) else {
+            Issue.record("Butt bounds must not be nil")
+            return
+        }
+        let buttDocMinX = CGPoint(x: buttBounds.minX, y: buttBounds.minY).applying(buttUpdated.transform.layerToDocument).x
+        let buttDocMaxX = CGPoint(x: buttBounds.maxX, y: buttBounds.maxY).applying(buttUpdated.transform.layerToDocument).x
+        #expect(abs(buttDocMinX - 100) <= 1.0)
+        #expect(abs(buttDocMaxX - 200) <= 1.0)
+
+        // 2. Square cap: extends by width/2 past endpoints
+        session.cancelPen()
+        session.beginPen(at: CGPoint(x: 100, y: 100))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 200, y: 100))
+        session.endPenDrag()
+        session.finishPen()
+
+        let squareLayerID = session.activeLayerID!
+        let squareIndex = session.document!.layers.firstIndex(where: { $0.id == squareLayerID })!
+        if var v = session.document?.layers[squareIndex].vector {
+            v.stroke = VectorStrokeStyle(color: session.foregroundColor, width: 4.0, lineCap: .square, lineJoin: .round, isEnabled: true)
+            session.document?.layers[squareIndex].vector = v
+        }
+
+        session.strokePathFromVector(layerID: squareLayerID)
+
+        let squareUpdated = session.document!.layers[squareIndex]
+        guard let squareBounds = paintedBounds(in: squareUpdated.asset!.image) else {
+            Issue.record("Square bounds must not be nil")
+            return
+        }
+        let squareDocMinX = CGPoint(x: squareBounds.minX, y: squareBounds.minY).applying(squareUpdated.transform.layerToDocument).x
+        let squareDocMaxX = CGPoint(x: squareBounds.maxX, y: squareBounds.maxY).applying(squareUpdated.transform.layerToDocument).x
+        #expect(abs(squareDocMinX - 98) <= 1.5)
+        #expect(abs(squareDocMaxX - 202) <= 1.5)
+    }
+
+    // 18. Phase 9 Test 5: Transformed path fidelity
+    @Test func strokePathFidelityTransformedPathTest() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 1, green: 0, blue: 0)
+        session.penStrokeWidth = 4.0
+
+        session.beginPen(at: CGPoint(x: 100, y: 100))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 200, y: 100))
+        session.endPenDrag()
+        session.finishPen()
+
+        let layerID = session.activeLayerID!
+        let layerIndex = session.document!.layers.firstIndex(where: { $0.id == layerID })!
+
+        // Apply rotation (90 degrees) and horizontal flip
+        var transform = session.document!.layers[layerIndex].transform
+        transform.rotation = 90
+        transform.flipX = true
+        session.document!.layers[layerIndex].transform = transform
+
+        session.strokePathFromVector(layerID: layerID)
+
+        let layer = session.document!.layers[layerIndex]
+        let image = layer.asset!.image
+        let bounds = paintedBounds(in: image)
+        #expect(bounds != nil)
+
+        // Midpoint of local path in layer-local coordinates is at (anchor0 + anchor1)/2
+        let pt0 = layer.vector!.subpaths[0].points[0].anchor
+        let pt1 = layer.vector!.subpaths[0].points[1].anchor
+        let localMid = CGPoint(x: (pt0.x + pt1.x) / 2, y: (pt0.y + pt1.y) / 2)
+        let docMid = localMid.applying(transform.layerToDocument)
+
+        let centerAlpha = pixelAlpha(at: docMid, in: layer)
+        #expect(centerAlpha >= 150)
+    }
+
+    // 19. Phase 7: Existing raster content preservation
+    @Test func strokePathPreservesExistingPixels() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 1, green: 0, blue: 0) // Red
+        session.penStrokeWidth = 4.0
+
+        // Create closed triangle
+        session.beginPen(at: CGPoint(x: 50, y: 50))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 150, y: 50))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 100, y: 150))
+        session.endPenDrag()
+        session.closePen()
+
+        let layerID = session.activeLayerID!
+
+        // First, Fill Path with Red
+        session.fillPathFromVector(layerID: layerID)
+        let filledLayer = session.document!.layers.first(where: { $0.id == layerID })!
+        let fillCenterAlpha = pixelAlpha(at: CGPoint(x: 100, y: 75), in: filledLayer)
+        #expect(fillCenterAlpha >= 200)
+
+        // Then, change color to Blue and Stroke Path
+        session.foregroundColor = PaletteColor(red: 0, green: 0, blue: 1) // Blue
+        session.strokePathFromVector(layerID: layerID)
+
+        let strokedLayer = session.document!.layers.first(where: { $0.id == layerID })!
+        // Interior pixel (from fill) must still be present
+        let interiorAlpha = pixelAlpha(at: CGPoint(x: 100, y: 75), in: strokedLayer)
+        #expect(interiorAlpha >= 200)
+
+        // Boundary stroke pixel must also be present
+        let boundaryAlpha = pixelAlpha(at: CGPoint(x: 100, y: 50), in: strokedLayer)
+        #expect(boundaryAlpha >= 200)
+    }
+
+    // 20. Phase 6: Selection interaction
+    @Test func strokePathRespectsDocumentSelectionClipping() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 1, green: 0, blue: 0)
+        session.penStrokeWidth = 4.0
+
+        // Horizontal line from (100, 100) to (200, 100)
+        session.beginPen(at: CGPoint(x: 100, y: 100))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 200, y: 100))
+        session.endPenDrag()
+        session.finishPen()
+
+        let layerID = session.activeLayerID!
+
+        // Active selection covering left half only: x in [90..150]
+        let selRect = CGRect(x: 90, y: 90, width: 60, height: 20)
+        session.document?.selection = DocumentSelection(path: CGPath(rect: selRect, transform: nil), antialiased: false, feather: 0)
+
+        session.strokePathFromVector(layerID: layerID)
+
+        let layer = session.document!.layers.first(where: { $0.id == layerID })!
+
+        // Inside selection at x = 120: stroke is painted
+        let insideAlpha = pixelAlpha(at: CGPoint(x: 120, y: 100), in: layer)
+        #expect(insideAlpha >= 150)
+
+        // Outside selection at x = 180: clipped away, transparent
+        let outsideAlpha = pixelAlpha(at: CGPoint(x: 180, y: 100), in: layer)
+        #expect(outsideAlpha == 0)
+    }
+
+    // 21. Phase 2B-9.3 Regression Test 1: UI Stroke Path action updates raster asset
+    @Test func strokePathMenuActionUpdatesDisplayedRaster() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 1, green: 0, blue: 0)
+        session.penStrokeWidth = 4.0
+        let canvas = CanvasView(session: session)
+
+        // Draw open path: (50, 50) to (150, 50)
+        session.beginPen(at: CGPoint(x: 50, y: 50))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 150, y: 50))
+        session.endPenDrag()
+        session.finishPen()
+
+        guard let layerID = session.activeLayerID,
+              let layer = session.document?.layers.first(where: { $0.id == layerID }) else {
+            Issue.record("Layer should exist")
+            return
+        }
+
+        // Before stroke: asset has zero non-transparent pixels
+        #expect(paintedBounds(in: layer.asset!.image) == nil)
+
+        // Invoke context menu at midpoint (100, 50)
+        let midDoc = CGPoint(x: 100, y: 50)
+        let midView = session.viewport.viewPoint(from: midDoc, documentSize: session.document!.size)
+        let event = NSEvent.mouseEvent(
+            with: .rightMouseDown,
+            location: midView,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )!
+        guard let menu = canvas.menu(for: event) else {
+            Issue.record("Menu should not be nil")
+            return
+        }
+        guard let strokeItem = menu.items.first(where: { $0.title == "Stroke Path" }) else {
+            Issue.record("Stroke Path item must be present in menu")
+            return
+        }
+
+        // Trigger action
+        canvas.perform(strokeItem.action!, with: strokeItem)
+
+        // Verify layer asset now has painted pixels
+        let updatedLayer = session.document!.layers.first(where: { $0.id == layerID })!
+        guard let bounds = paintedBounds(in: updatedLayer.asset!.image) else {
+            Issue.record("Painted bounds should not be nil after Stroke Path")
+            return
+        }
+        #expect(bounds.width > 0)
+        #expect(bounds.height > 0)
+    }
+
+    // 22. Phase 2B-9.3 Regression Test 2: Stroke open path from endpoint target
+    @Test func strokeOpenPathFromEndpointTarget() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 1, green: 0, blue: 0)
+        session.penStrokeWidth = 4.0
+        let canvas = CanvasView(session: session)
+
+        // Draw open path from (40, 40) to (140, 40)
+        session.beginPen(at: CGPoint(x: 40, y: 40))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 140, y: 40))
+        session.endPenDrag()
+        session.finishPen()
+
+        guard let layerID = session.activeLayerID else {
+            Issue.record("Active layer should exist")
+            return
+        }
+
+        // Right-click exactly on endpoint (140, 40)
+        let endpointView = session.viewport.viewPoint(from: CGPoint(x: 140, y: 40), documentSize: session.document!.size)
+        let event = NSEvent.mouseEvent(
+            with: .rightMouseDown,
+            location: endpointView,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )!
+
+        guard let menu = canvas.menu(for: event) else {
+            Issue.record("Menu must not be nil when clicking on endpoint")
+            return
+        }
+        guard let strokeItem = menu.items.first(where: { $0.title == "Stroke Path" }) else {
+            Issue.record("Stroke Path item must be present when clicking on endpoint")
+            return
+        }
+
+        canvas.perform(strokeItem.action!, with: strokeItem)
+
+        let updatedLayer = session.document!.layers.first(where: { $0.id == layerID })!
+        guard let bounds = paintedBounds(in: updatedLayer.asset!.image) else {
+            Issue.record("Painted bounds should not be nil after Stroke Path from endpoint")
+            return
+        }
+        #expect(bounds.width > 0)
+        #expect(bounds.height > 0)
+    }
+
+    // 23. Phase 2B-9.3 Regression Test 3: Stroke closed path from anchor target
+    @Test func strokeClosedPathFromAnchorTarget() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 1, green: 0, blue: 0)
+        session.penStrokeWidth = 4.0
+        let canvas = CanvasView(session: session)
+
+        // Draw triangle: (50, 50), (150, 50), (100, 150), closed
+        session.beginPen(at: CGPoint(x: 50, y: 50))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 150, y: 50))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 100, y: 150))
+        session.endPenDrag()
+        session.closePen()
+
+        guard let layerID = session.activeLayerID else {
+            Issue.record("Active layer should exist")
+            return
+        }
+
+        // Right-click on anchor (100, 150)
+        let anchorView = session.viewport.viewPoint(from: CGPoint(x: 100, y: 150), documentSize: session.document!.size)
+        let event = NSEvent.mouseEvent(
+            with: .rightMouseDown,
+            location: anchorView,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )!
+
+        guard let menu = canvas.menu(for: event) else {
+            Issue.record("Menu must not be nil when clicking on closed anchor")
+            return
+        }
+        guard let strokeItem = menu.items.first(where: { $0.title == "Stroke Path" }) else {
+            Issue.record("Stroke Path item must be present when clicking on closed anchor")
+            return
+        }
+
+        canvas.perform(strokeItem.action!, with: strokeItem)
+
+        let updatedLayer = session.document!.layers.first(where: { $0.id == layerID })!
+        guard let bounds = paintedBounds(in: updatedLayer.asset!.image) else {
+            Issue.record("Painted bounds should not be nil after Stroke Path from anchor")
+            return
+        }
+        #expect(bounds.width > 0)
+        #expect(bounds.height > 0)
+    }
+
+    // 24. Phase 2B-9.3 Regression Test 4: History transaction count for Stroke Path
+    @Test func strokePathCreatesExactlyOneHistoryTransaction() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 1, green: 0, blue: 0)
+        session.penStrokeWidth = 4.0
+        let canvas = CanvasView(session: session)
+
+        // Case A: Stroke committed vector layer
+        session.beginPen(at: CGPoint(x: 50, y: 50))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 150, y: 50))
+        session.endPenDrag()
+        session.finishPen()
+
+        let historyCountBeforeStroke = session.history.undoCount
+
+        let midDoc = CGPoint(x: 100, y: 50)
+        let midView = session.viewport.viewPoint(from: midDoc, documentSize: session.document!.size)
+        let event = NSEvent.mouseEvent(
+            with: .rightMouseDown,
+            location: midView,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )!
+
+        let menu = canvas.menu(for: event)!
+        let strokeItem = menu.items.first(where: { $0.title == "Stroke Path" })!
+        canvas.perform(strokeItem.action!, with: strokeItem)
+
+        // Exactly one new transaction added
+        #expect(session.history.undoCount == historyCountBeforeStroke + 1)
+        #expect(session.history.undoName == "Stroke Path")
+    }
+
+    // 25. Phase 2B-9.3 Regression Test 5: Stroking active pen draft creates exactly one transaction
+    @Test func strokePenDraftCreatesExactlyOneHistoryTransaction() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 1, green: 0, blue: 0)
+        session.penStrokeWidth = 4.0
+        let canvas = CanvasView(session: session)
+
+        // Pen draft active (not finished)
+        session.beginPen(at: CGPoint(x: 50, y: 50))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 150, y: 50))
+        session.endPenDrag()
+
+        #expect(session.penDraft != nil)
+        let historyCountBeforeStroke = session.history.undoCount
+
+        let event = NSEvent.mouseEvent(
+            with: .rightMouseDown,
+            location: CGPoint(x: 100, y: 50),
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            clickCount: 1,
+            pressure: 1
+        )!
+
+        guard let menu = canvas.menu(for: event),
+              let strokeItem = menu.items.first(where: { $0.title == "Stroke Path" }) else {
+            Issue.record("Stroke Path item must be present in menu for active pen draft")
+            return
+        }
+
+        canvas.perform(strokeItem.action!, with: strokeItem)
+
+        #expect(session.penDraft == nil)
+        guard let layerID = session.activeLayerID,
+              let layer = session.document?.layers.first(where: { $0.id == layerID }) else {
+            Issue.record("Layer should exist after stroking draft")
+            return
+        }
+
+        guard let bounds = paintedBounds(in: layer.asset!.image) else {
+            Issue.record("Painted bounds should not be nil")
+            return
+        }
+        #expect(bounds.width > 0)
+
+        // Exactly one new transaction in history
+        #expect(session.history.undoCount == historyCountBeforeStroke + 1)
+        #expect(session.history.undoName == "Stroke Path")
+    }
+
+    // 26. Phase 2B-9.2 Fidelity Audit: Closing path with drag produces continuous curved stroke
+    @Test func closingPathWithDragProducesCurvedStroke() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 0, green: 1, blue: 0)
+        session.penStrokeWidth = 4.0
+
+        // Point 1: (50, 100)
+        session.beginPen(at: CGPoint(x: 50, y: 100))
+        session.endPenDrag()
+
+        // Point 2: (150, 50)
+        session.beginPen(at: CGPoint(x: 150, y: 50))
+        session.endPenDrag()
+
+        // Point 3: (250, 100)
+        session.beginPen(at: CGPoint(x: 250, y: 100))
+        session.endPenDrag()
+
+        // Close to Point 1 by dragging down: creating smooth curve
+        session.beginPenClosing(atViewPoint: CGPoint(x: 50, y: 100))
+        session.dragPenClosing(to: CGPoint(x: 50, y: 140))
+        session.endPenClosing()
+
+        // Committed vector layer should be closed and have curved control handles
+        guard let layerID = session.activeLayerID,
+              let layer = session.document?.layers.first(where: { $0.id == layerID }),
+              let vector = layer.vector else {
+            Issue.record("Layer and vector should exist after closing")
+            return
+        }
+
+        #expect(vector.subpaths.count == 1)
+        #expect(vector.subpaths[0].isClosed)
+        #expect(vector.subpaths[0].points[0].previousControl != nil)
+        #expect(vector.subpaths[0].points[0].nextControl != nil)
+
+        // Stroke the path
+        session.strokePathFromVector(layerID: layerID)
+
+        let updatedLayer = session.document!.layers.first(where: { $0.id == layerID })!
+        #expect(updatedLayer.asset != nil)
+        guard let bounds = paintedBounds(in: updatedLayer.asset!.image) else {
+            Issue.record("Painted bounds should not be nil")
+            return
+        }
+        #expect(bounds.width > 0)
+        #expect(bounds.height > 0)
+    }
+
+    // 27. Phase 2B-9.2 Fidelity Audit: Stroke Path color matches foreground color
+    @Test func strokePathColorMatchesForegroundColor() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 1, green: 0, blue: 0) // pure red
+        session.penStrokeWidth = 6.0
+
+        session.beginPen(at: CGPoint(x: 50, y: 50))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 150, y: 50))
+        session.endPenDrag()
+        session.finishPen()
+
+        let layerID = session.activeLayerID!
+        session.strokePathFromVector(layerID: layerID)
+
+        let layer = session.document!.layers.first(where: { $0.id == layerID })!
+        let midDoc = CGPoint(x: 100, y: 50)
+        let rgba = pixelRGBA(at: midDoc, in: layer)
+        #expect(rgba != nil)
+        if let rgba = rgba {
+            #expect(rgba.r > 240)
+            #expect(rgba.g < 15)
+            #expect(rgba.b < 15)
+            #expect(rgba.a > 240)
+        }
+    }
+
+    // 28. Phase 2B-9.2 Fidelity Audit: Empty selection completely clips Stroke Path
+    @Test func strokePathWithEmptySelectionTouchesNothing() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 1, green: 0, blue: 0)
+        session.penStrokeWidth = 4.0
+
+        session.beginPen(at: CGPoint(x: 50, y: 50))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 150, y: 50))
+        session.endPenDrag()
+        session.finishPen()
+
+        let layerID = session.activeLayerID!
+        session.document?.selection = DocumentSelection(path: CGMutablePath(), antialiased: false, feather: 0)
+
+        session.strokePathFromVector(layerID: layerID)
+
+        let layer = session.document!.layers.first(where: { $0.id == layerID })!
+        #expect(paintedBounds(in: layer.asset!.image) == nil)
+    }
 }
+

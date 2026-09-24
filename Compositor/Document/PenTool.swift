@@ -11,14 +11,20 @@ struct PenDraft: Equatable, Sendable {
     var continuingLayerID: UUID?
     /// When continuing, whether the draft was reversed (started from the last endpoint instead of the first).
     var continuingReversed: Bool = false
+    /// Whether the user has pressed down on the closing anchor (the first anchor), awaiting a drag or release.
+    var isClosingCandidate: Bool = false
+    /// View-space position where the closing click began, used to measure the drag threshold.
+    var closingStartViewPoint: CGPoint? = nil
 
-    init(subpath: VectorSubpath = VectorSubpath(), activeAnchorIndex: Int? = nil, isDragging: Bool = false, pointer: CGPoint? = nil, continuingLayerID: UUID? = nil, continuingReversed: Bool = false) {
+    init(subpath: VectorSubpath = VectorSubpath(), activeAnchorIndex: Int? = nil, isDragging: Bool = false, pointer: CGPoint? = nil, continuingLayerID: UUID? = nil, continuingReversed: Bool = false, isClosingCandidate: Bool = false, closingStartViewPoint: CGPoint? = nil) {
         self.subpath = subpath
         self.activeAnchorIndex = activeAnchorIndex
         self.isDragging = isDragging
         self.pointer = pointer
         self.continuingLayerID = continuingLayerID
         self.continuingReversed = continuingReversed
+        self.isClosingCandidate = isClosingCandidate
+        self.closingStartViewPoint = closingStartViewPoint
     }
 
     var isClosed: Bool { subpath.isClosed }
@@ -105,6 +111,48 @@ extension EditorSession {
         penDraft = draft
     }
 
+    /// Begins a closing candidate gesture on the first anchor, awaiting drag or release.
+    func beginPenClosing(atViewPoint viewPoint: CGPoint) {
+        guard var draft = penDraft, draft.subpath.points.count >= 2 else { return }
+        draft.isClosingCandidate = true
+        draft.closingStartViewPoint = viewPoint
+        draft.isDragging = false
+        draft.activeAnchorIndex = 0
+        penDraft = draft
+    }
+
+    /// Shapes Bézier handles on the first anchor while dragging during a closing candidate gesture.
+    func dragPenClosing(to point: CGPoint) {
+        guard var draft = penDraft, draft.isClosingCandidate,
+              !draft.subpath.points.isEmpty,
+              point.x.isFinite, point.y.isFinite else { return }
+
+        draft.isDragging = true
+        let P = draft.subpath.points[0].anchor
+        let dx = point.x - P.x
+        let dy = point.y - P.y
+
+        if hypot(dx, dy) >= 1 {
+            draft.subpath.points[0].nextControl = CGPoint(x: P.x + dx, y: P.y + dy)
+            draft.subpath.points[0].previousControl = CGPoint(x: P.x - dx, y: P.y - dy)
+        } else {
+            draft.subpath.points[0].nextControl = nil
+            draft.subpath.points[0].previousControl = nil
+        }
+        draft.pointer = point
+        penDraft = draft
+    }
+
+    /// Ends the closing candidate gesture and commits the closed path.
+    func endPenClosing() {
+        guard var draft = penDraft, draft.isClosingCandidate else { return }
+        draft.isClosingCandidate = false
+        draft.isDragging = false
+        draft.closingStartViewPoint = nil
+        penDraft = draft
+        closePen()
+    }
+
     /// Closes the current subpath and commits the vector layer.
     func closePen() {
         guard var draft = penDraft, draft.subpath.points.count >= 2 else { return }
@@ -148,6 +196,14 @@ extension EditorSession {
     func undoPenDraft() {
         guard var draft = penDraft else { return }
 
+        if draft.isClosingCandidate {
+            draft.isClosingCandidate = false
+            draft.isDragging = false
+            draft.closingStartViewPoint = nil
+            penDraft = draft
+            return
+        }
+
         if draft.subpath.points.count <= 1 {
             penDraft = nil
         } else {
@@ -177,8 +233,11 @@ extension EditorSession {
         guard rawBounds.origin.x.isFinite, rawBounds.origin.y.isFinite,
               rawBounds.width.isFinite, rawBounds.height.isFinite else { return }
 
-        let strokeWidth = stroke?.width ?? 0
-        let padding = max(4, ceil(strokeWidth / 2) + 2)
+        let strokeWidth = (stroke?.isEnabled == true ? stroke?.width : nil) ?? CGFloat(penStrokeWidth)
+        let miterLimit = stroke?.miterLimit ?? 10
+        let miterPadding = ceil(strokeWidth * miterLimit / 2)
+        let strokePadding = ceil(strokeWidth / 2)
+        let padding = max(16, ceil(strokePadding + miterPadding + 4))
         let docRect = rawBounds.insetBy(dx: -padding, dy: -padding).integral
         let layerOrigin = docRect.origin
         let layerSize = CGSize(width: max(1, docRect.width), height: max(1, docRect.height))
@@ -402,7 +461,7 @@ extension EditorSession {
 
     /// Strokes the subpaths of the specified vector layer using the current foreground color and stroke settings,
     /// painting directly into the layer's raster asset in document coordinates while preserving the VectorModel.
-    func strokePathFromVector(layerID: UUID) {
+    func strokePathFromVector(layerID: UUID, recordHistory: Bool = true) {
         guard let document, canEditLayers,
               let index = document.layers.firstIndex(where: { $0.id == layerID }),
               let vector = document.layers[index].vector else { return }
@@ -413,28 +472,58 @@ extension EditorSession {
         let strokeModel = VectorModel(subpaths: validSubpaths, fill: nil, stroke: vector.stroke)
         let localPath = VectorBridge.cgPath(from: strokeModel)
 
-        let rawStrokeWidth = (vector.stroke?.isEnabled == true) ? (vector.stroke?.width ?? CGFloat(penStrokeWidth)) : CGFloat(penStrokeWidth)
-        let strokeWidth = max(1.0, rawStrokeWidth)
-        let lineCap = vector.stroke?.lineCap.cgCap ?? .round
-        let lineJoin = vector.stroke?.lineJoin.cgJoin ?? .round
-        let miterLimit = vector.stroke?.miterLimit ?? 10
+        let strokeWidth: CGFloat
+        let lineCap: CGLineCap
+        let lineJoin: CGLineJoin
+        let miterLimit: CGFloat
+
+        if let stroke = vector.stroke, stroke.isEnabled {
+            strokeWidth = max(1.0, stroke.width)
+            lineCap = stroke.lineCap.cgCap
+            lineJoin = stroke.lineJoin.cgJoin
+            miterLimit = stroke.miterLimit
+        } else {
+            strokeWidth = max(1.0, CGFloat(penStrokeWidth))
+            lineCap = VectorLineCap.round.cgCap
+            lineJoin = VectorLineJoin.round.cgJoin
+            miterLimit = 10
+        }
+
         let strokeColor = foregroundColor.cgColor
 
-        paintIntoVectorLayer(at: index, name: "Stroke Path", localPath: localPath) { context, path in
-            context.setLineWidth(strokeWidth)
-            context.setLineCap(lineCap)
-            context.setLineJoin(lineJoin)
-            context.setMiterLimit(miterLimit)
-            context.setStrokeColor(strokeColor)
-            context.addPath(path)
-            context.strokePath()
+        paintIntoVectorLayer(at: index, name: "Stroke Path", localPath: localPath, recordHistory: recordHistory) { context, path in
+            VectorRenderer.strokePath(
+                path,
+                width: strokeWidth,
+                lineCap: lineCap,
+                lineJoin: lineJoin,
+                miterLimit: miterLimit,
+                color: strokeColor,
+                in: context
+            )
         }
+    }
+
+    /// Commits the active pen draft and strokes it in exactly one history transaction named "Stroke Path".
+    func strokePenDraft() {
+        guard let draft = penDraft, draft.subpath.points.count >= 2 || draft.subpath.isClosed else { return }
+        let continuingID = draft.continuingLayerID
+        penDraft = nil
+
+        finishOpacityEdit()
+        beginEdit("Stroke Path")
+        commitPen(subpath: draft.subpath, replacingLayerID: continuingID)
+        if let layerID = activeLayerID {
+            strokePathFromVector(layerID: layerID, recordHistory: false)
+        }
+        endEdit()
     }
 
     private func paintIntoVectorLayer(
         at index: Int,
         name: String,
         localPath: CGPath,
+        recordHistory: Bool = true,
         _ draw: (CGContext, CGPath) -> Void
     ) {
         guard let document, index < document.layers.count else { return }
@@ -470,7 +559,7 @@ extension EditorSession {
                     return
                 }
                 let clip = try selection.clip(canvas: document.size)
-                guard let coverage = clip.coverage, !clip.rect.isEmpty else {
+                guard clip.coverage != nil, !clip.rect.isEmpty else {
                     return
                 }
                 context.saveGState()
@@ -491,12 +580,16 @@ extension EditorSession {
             let thumbnail = try PixelInvert.thumbnail(of: newImage)
             let assetName = layer.asset?.name ?? layer.name
 
-            finishOpacityEdit()
-            beginEdit(name)
+            if recordHistory {
+                finishOpacityEdit()
+                beginEdit(name)
+            }
             self.document?.layers[index].asset = ImportedImage(image: newImage, thumbnail: thumbnail, name: assetName)
             self.document?.layers[index].vector = vector
             self.document?.layers[index].transform = layer.transform
-            endEdit()
+            if recordHistory {
+                endEdit()
+            }
             brushRevision += 1
         } catch {
             brushError = error.localizedDescription

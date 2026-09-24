@@ -1688,7 +1688,17 @@ final class CanvasView: NSView {
             synchronizeDisplay()
             return
         }
-        if session.tool == .pen, session.penDraft != nil, lastDragPoint == nil, let document = session.document {
+        if session.tool == .pen, let draft = session.penDraft, lastDragPoint == nil, let document = session.document {
+            if draft.isClosingCandidate {
+                let start = draft.closingStartViewPoint ?? point
+                let dragDistance = hypot(point.x - start.x, point.y - start.y)
+                let dragThreshold: CGFloat = 3.0
+                if dragDistance >= dragThreshold {
+                    session.dragPenClosing(to: session.viewport.documentPoint(from: point, documentSize: document.size))
+                    synchronizeDisplay()
+                }
+                return
+            }
             session.dragPen(to: session.viewport.documentPoint(from: point, documentSize: document.size))
             synchronizeDisplay()
             return
@@ -1847,9 +1857,14 @@ final class CanvasView: NSView {
             session.finishShape()
             synchronizeDisplay()
         }
-        if session.tool == .pen, session.penDraft?.isDragging == true {
-            session.endPenDrag()
-            synchronizeDisplay()
+        if session.tool == .pen {
+            if let draft = session.penDraft, draft.isClosingCandidate {
+                session.endPenClosing()
+                synchronizeDisplay()
+            } else if session.penDraft?.isDragging == true {
+                session.endPenDrag()
+                synchronizeDisplay()
+            }
         }
         if session.tool == .directSelection, session.directSelectionDrag != nil {
             session.endDirectSelectionDrag()
@@ -2175,7 +2190,7 @@ final class CanvasView: NSView {
             let firstAnchorDoc = draft.subpath.points[0].anchor
             let firstAnchorView = session.viewport.viewPoint(from: firstAnchorDoc, documentSize: document.size)
             if hypot(firstAnchorView.x - point.x, firstAnchorView.y - point.y) <= 10.0 {
-                session.closePen()
+                session.beginPenClosing(atViewPoint: point)
                 synchronizeDisplay()
                 return
             }
@@ -2306,11 +2321,8 @@ final class CanvasView: NSView {
     }
 
     @objc private func strokePathFromPenDraft(_ sender: NSMenuItem) {
-        guard let draft = session.penDraft, draft.subpath.points.count >= 2 else { return }
-        session.finishPen()
-        if let layerID = session.activeLayerID {
-            session.strokePathFromVector(layerID: layerID)
-        }
+        guard let draft = session.penDraft, draft.subpath.points.count >= 2 || draft.subpath.isClosed else { return }
+        session.strokePenDraft()
         synchronizeDisplay()
     }
 

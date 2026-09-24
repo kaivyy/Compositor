@@ -230,20 +230,41 @@ nonisolated enum VectorRenderer {
         // 2. Stroke all subpaths if stroke is enabled
         if let stroke = model.stroke, stroke.isEnabled {
             let fullPath = VectorBridge.cgPath(from: model)
-            context.saveGState()
-            context.setStrokeColor(stroke.color.cgColor)
-            context.setLineWidth(stroke.width)
-            context.setLineCap(stroke.lineCap.cgCap)
-            context.setLineJoin(stroke.lineJoin.cgJoin)
-            context.setMiterLimit(stroke.miterLimit)
-            context.addPath(fullPath)
-            context.strokePath()
-            context.restoreGState()
+            strokePath(
+                fullPath,
+                width: stroke.width,
+                lineCap: stroke.lineCap.cgCap,
+                lineJoin: stroke.lineJoin.cgJoin,
+                miterLimit: stroke.miterLimit,
+                color: stroke.color.cgColor,
+                in: context
+            )
         }
 
         guard let image = context.makeImage() else {
             throw ExportError.render
         }
         return image
+    }
+
+    /// Canonical stroke renderer matching vector geometry semantics.
+    public static func strokePath(
+        _ path: CGPath,
+        width: CGFloat,
+        lineCap: CGLineCap,
+        lineJoin: CGLineJoin,
+        miterLimit: CGFloat,
+        color: CGColor,
+        in context: CGContext
+    ) {
+        context.saveGState()
+        context.setStrokeColor(color)
+        context.setLineWidth(max(1.0, width))
+        context.setLineCap(lineCap)
+        context.setLineJoin(lineJoin)
+        context.setMiterLimit(miterLimit)
+        context.addPath(path)
+        context.strokePath()
+        context.restoreGState()
     }
 }
