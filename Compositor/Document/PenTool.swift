@@ -413,7 +413,8 @@ extension EditorSession {
         let strokeModel = VectorModel(subpaths: validSubpaths, fill: nil, stroke: vector.stroke)
         let localPath = VectorBridge.cgPath(from: strokeModel)
 
-        let strokeWidth = (vector.stroke?.isEnabled == true) ? (vector.stroke?.width ?? CGFloat(penStrokeWidth)) : CGFloat(penStrokeWidth)
+        let rawStrokeWidth = (vector.stroke?.isEnabled == true) ? (vector.stroke?.width ?? CGFloat(penStrokeWidth)) : CGFloat(penStrokeWidth)
+        let strokeWidth = max(1.0, rawStrokeWidth)
         let lineCap = vector.stroke?.lineCap.cgCap ?? .round
         let lineJoin = vector.stroke?.lineJoin.cgJoin ?? .round
         let miterLimit = vector.stroke?.miterLimit ?? 10

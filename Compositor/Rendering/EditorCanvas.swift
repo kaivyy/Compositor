@@ -2192,6 +2192,21 @@ final class CanvasView: NSView {
         let menu = NSMenu()
         if let draft = session.penDraft {
             if draft.subpath.points.count >= 2 {
+                if draft.subpath.isClosed {
+                    let makeSelectionItem = NSMenuItem(title: "Make Selection", action: #selector(makeSelectionFromPenDraft(_:)), keyEquivalent: "")
+                    makeSelectionItem.target = self
+                    menu.addItem(makeSelectionItem)
+
+                    let fillPathItem = NSMenuItem(title: "Fill Path", action: #selector(fillPathFromPenDraft(_:)), keyEquivalent: "")
+                    fillPathItem.target = self
+                    menu.addItem(fillPathItem)
+                }
+
+                let strokePathItem = NSMenuItem(title: "Stroke Path", action: #selector(strokePathFromPenDraft(_:)), keyEquivalent: "")
+                strokePathItem.target = self
+                menu.addItem(strokePathItem)
+
+                menu.addItem(.separator())
                 let finishItem = NSMenuItem(title: "Finish Path", action: #selector(finishPenPath(_:)), keyEquivalent: "")
                 finishItem.target = self
                 menu.addItem(finishItem)
@@ -2204,17 +2219,28 @@ final class CanvasView: NSView {
             let cancelItem = NSMenuItem(title: "Cancel Path", action: #selector(cancelPenPath(_:)), keyEquivalent: "")
             cancelItem.target = self
             menu.addItem(cancelItem)
+
+            if session.selection != nil {
+                menu.addItem(.separator())
+                let deselectItem = NSMenuItem(title: "Deselect", action: #selector(deselectDocumentSelection(_:)), keyEquivalent: "")
+                deselectItem.target = self
+                menu.addItem(deselectItem)
+            }
             return menu.items.isEmpty ? nil : menu
         }
 
-        // When no active draft, check if right-click hit a closed anchor or committed vector layer
+        // When no active draft, check if right-click hit a closed anchor, open endpoint, or committed vector layer
         guard let point else { return nil }
         let targetLayerID: UUID?
         if let anchorHit = session.hitTestPenClosedAnchor(at: point) {
             targetLayerID = anchorHit.layerID
             session.contextualHitTarget = anchorHit
+        } else if let endpointHit = session.hitTestPenEndpoint(at: point) {
+            targetLayerID = endpointHit.layerID
         } else if let hit = session.hitTestPenVectorLayer(at: point) {
             targetLayerID = hit.layerID
+        } else if let active = session.activeLayer, active.vector != nil, active.isVisible {
+            targetLayerID = active.id
         } else {
             targetLayerID = nil
         }
@@ -2259,6 +2285,33 @@ final class CanvasView: NSView {
         }
 
         return menu.items.isEmpty ? nil : menu
+    }
+
+    @objc private func makeSelectionFromPenDraft(_ sender: NSMenuItem) {
+        guard let draft = session.penDraft, draft.subpath.isClosed else { return }
+        session.closePen()
+        if let layerID = session.activeLayerID {
+            session.makeSelectionFromVector(layerID: layerID)
+        }
+        synchronizeDisplay()
+    }
+
+    @objc private func fillPathFromPenDraft(_ sender: NSMenuItem) {
+        guard let draft = session.penDraft, draft.subpath.isClosed else { return }
+        session.closePen()
+        if let layerID = session.activeLayerID {
+            session.fillPathFromVector(layerID: layerID)
+        }
+        synchronizeDisplay()
+    }
+
+    @objc private func strokePathFromPenDraft(_ sender: NSMenuItem) {
+        guard let draft = session.penDraft, draft.subpath.points.count >= 2 else { return }
+        session.finishPen()
+        if let layerID = session.activeLayerID {
+            session.strokePathFromVector(layerID: layerID)
+        }
+        synchronizeDisplay()
     }
 
     @objc private func makeSelectionFromPenVector(_ sender: NSMenuItem) {

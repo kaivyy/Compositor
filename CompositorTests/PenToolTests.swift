@@ -1682,4 +1682,174 @@ struct PenToolTests {
         #expect(decodedVector.subpaths[0].isClosed == true)
         #expect(hasNonZeroPixels(image))
     }
+
+    // MARK: - Phase 2B-9.1 Tests
+
+    // 10. Stroke Path produces actual raster pixels for open and closed paths, preserving VectorModel, with undo/redo
+    @Test func strokePathProducesActualRasterPixelsAndPreservesVectorModel() {
+        let session = makeSession()
+        session.foregroundColor = PaletteColor(red: 1, green: 0, blue: 0) // Red
+        session.penStrokeWidth = 2.0
+
+        // Open path
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 60, y: 40))
+        session.endPenDrag()
+        session.finishPen()
+
+        let openLayerID = session.activeLayerID!
+        let openLayer = session.document!.layers.first(where: { $0.id == openLayerID })!
+        let openVectorBefore = openLayer.vector!
+
+        #expect(!hasNonZeroPixels(openLayer.asset!.image))
+        session.strokePathFromVector(layerID: openLayerID)
+
+        let openLayerAfter = session.document!.layers.first(where: { $0.id == openLayerID })!
+        #expect(hasNonZeroPixels(openLayerAfter.asset!.image))
+        #expect(openLayerAfter.vector == openVectorBefore)
+
+        session.undo()
+        let openLayerUndone = session.document!.layers.first(where: { $0.id == openLayerID })!
+        #expect(!hasNonZeroPixels(openLayerUndone.asset!.image))
+        #expect(openLayerUndone.vector == openVectorBefore)
+
+        session.redo()
+        let openLayerRedone = session.document!.layers.first(where: { $0.id == openLayerID })!
+        #expect(hasNonZeroPixels(openLayerRedone.asset!.image))
+        #expect(openLayerRedone.vector == openVectorBefore)
+
+        // Closed path
+        session.beginPen(at: CGPoint(x: 20, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 80, y: 20))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 80, y: 80))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 20, y: 80))
+        session.endPenDrag()
+        session.closePen()
+
+        let closedLayerID = session.activeLayerID!
+        let closedLayer = session.document!.layers.first(where: { $0.id == closedLayerID })!
+        let closedVectorBefore = closedLayer.vector!
+
+        #expect(!hasNonZeroPixels(closedLayer.asset!.image))
+        session.strokePathFromVector(layerID: closedLayerID)
+
+        let closedLayerAfter = session.document!.layers.first(where: { $0.id == closedLayerID })!
+        #expect(hasNonZeroPixels(closedLayerAfter.asset!.image))
+        #expect(closedLayerAfter.vector == closedVectorBefore)
+    }
+
+    // 11. Make Selection creates valid document selection geometry, aligns with transform, and does NOT paint
+    @Test func makeSelectionAlignsWithTransformedPathAndDoesNotPaint() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 10, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 70, y: 10))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 70, y: 50))
+        session.endPenDrag()
+        session.closePen()
+
+        let layerID = session.activeLayerID!
+        let layerIndex = session.document!.layers.firstIndex(where: { $0.id == layerID })!
+
+        // Apply translation and rotation transform
+        var transform = session.document!.layers[layerIndex].transform
+        transform.origin = CGPoint(x: 50, y: 30)
+        transform.rotation = 90
+        session.document!.layers[layerIndex].transform = transform
+
+        let vectorBefore = session.document!.layers[layerIndex].vector!
+        let assetBefore = session.document!.layers[layerIndex].asset!
+
+        session.makeSelectionFromVector(layerID: layerID)
+
+        let layerAfter = session.document!.layers[layerIndex]
+        #expect(session.document?.selection != nil)
+        #expect(session.document?.selection?.isEmpty == false)
+
+        // Make Selection must NOT modify vector model or paint raster pixels
+        #expect(layerAfter.vector == vectorBefore)
+        #expect(layerAfter.asset?.image === assetBefore.image)
+        #expect(!hasNonZeroPixels(layerAfter.asset!.image))
+
+        // Check geometry alignment: docPath from layerToDocument must match selection path
+        let closedModel = VectorModel(subpaths: vectorBefore.subpaths.filter(\.isClosed), fill: vectorBefore.fill, stroke: nil)
+        let localPath = VectorBridge.cgPath(from: closedModel)
+        var layerToDoc = transform.layerToDocument
+        let expectedDocPath = localPath.copy(using: &layerToDoc)!
+
+        let selectionBox = session.document!.selection!.path.boundingBoxOfPath
+        let expectedBox = expectedDocPath.boundingBoxOfPath
+        #expect(abs(selectionBox.origin.x - expectedBox.origin.x) < 0.001)
+        #expect(abs(selectionBox.origin.y - expectedBox.origin.y) < 0.001)
+        #expect(abs(selectionBox.size.width - expectedBox.size.width) < 0.001)
+        #expect(abs(selectionBox.size.height - expectedBox.size.height) < 0.001)
+    }
+
+    // 12. Context menu target resolution discovers open path endpoints
+    @Test func openPathEndpointHitTestingResolvesLayerForStroke() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 30, y: 30))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 90, y: 70))
+        session.endPenDrag()
+        session.finishPen()
+
+        let layerID = session.activeLayerID!
+        let doc = session.document!
+        let endpointView = session.viewport.viewPoint(from: CGPoint(x: 30, y: 30), documentSize: doc.size)
+
+        // Endpoint hit test resolves the layer
+        let hit = session.hitTestPenEndpoint(at: endpointView)
+        #expect(hit != nil)
+        #expect(hit?.layerID == layerID)
+
+        // Stroking through that layer succeeds and produces raster pixels
+        session.strokePathFromVector(layerID: hit!.layerID)
+        let layer = session.document!.layers.first(where: { $0.id == layerID })!
+        #expect(hasNonZeroPixels(layer.asset!.image))
+    }
+
+    // 13. Tool switching (Pen -> V -> Pen) preserves selection, vector model, and hit testing
+    @Test func toolSwitchingPreservesSelectionAndVectorModelAndHitTesting() {
+        let session = makeSession()
+        session.beginPen(at: CGPoint(x: 15, y: 15))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 65, y: 15))
+        session.endPenDrag()
+        session.beginPen(at: CGPoint(x: 40, y: 65))
+        session.endPenDrag()
+        session.closePen()
+
+        let layerID = session.activeLayerID!
+        let layerIndex = session.document!.layers.firstIndex(where: { $0.id == layerID })!
+        let originalVector = session.document!.layers[layerIndex].vector!
+
+        session.makeSelectionFromVector(layerID: layerID)
+        let originalSelection = session.document?.selection
+        #expect(originalSelection != nil)
+
+        // 1. Switch to Move (V)
+        session.selectTool(.move)
+        #expect(session.tool == .move)
+        #expect(session.document?.selection == originalSelection)
+        #expect(session.document?.layers[layerIndex].vector == originalVector)
+
+        // 2. Switch back to Pen (P)
+        session.selectTool(.pen)
+        #expect(session.tool == .pen)
+        #expect(session.document?.selection == originalSelection)
+        #expect(session.document?.layers[layerIndex].vector == originalVector)
+
+        // 3. Anchors remain discoverable in Pen
+        let anchorView = session.viewport.viewPoint(from: CGPoint(x: 15, y: 15), documentSize: session.document!.size)
+        let anchorHit = session.hitTestPenClosedAnchor(at: anchorView)
+        #expect(anchorHit != nil)
+        #expect(anchorHit?.layerID == layerID)
+        #expect(anchorHit?.anchorIndex.anchorIndex == 0)
+    }
 }

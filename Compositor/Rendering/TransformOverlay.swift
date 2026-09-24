@@ -97,6 +97,7 @@ final class TransformOverlay: NSView {
         else if session.tool == .directSelection { drawDirectSelection() }
         else if session.tool == .pen { /* pen draft/interaction drawn below */ }
         else { drawTransformHandles() }
+        drawPenPathOutline()
         drawSelection()
         drawLassoDraft()
         drawPenDraft()
@@ -521,14 +522,13 @@ final class TransformOverlay: NSView {
         context.restoreGState()
     }
 
-    private func drawPenPathInteraction() {
+    private func drawPenPathOutline() {
         guard session.tool == .pen,
               session.penDraft == nil,
               let document = session.document,
               let docToView = documentToView,
               let context = NSGraphicsContext.current?.cgContext else { return }
 
-        // 1. If an active layer has a VectorModel and is visible, draw its path outline and all its anchor points
         let activeVectorLayer = session.activeLayer.flatMap { layer in
             (layer.isVisible && layer.vector != nil && !(layer.vector?.subpaths.isEmpty ?? true)) ? layer : nil
         }
@@ -537,23 +537,35 @@ final class TransformOverlay: NSView {
             let layerToDoc = activeLayer.transform.layerToDocument
             var layerToView = layerToDoc.concatenating(docToView)
 
-            context.saveGState()
-
-            // 1a. Draw path outline (subtle dark backing + accent line for contrast)
             let basePath = VectorBridge.cgPath(from: vector)
             if let viewPath = basePath.copy(using: &layerToView) {
                 context.saveGState()
-                context.addPath(viewPath)
-                context.setStrokeColor(NSColor.black.withAlphaComponent(0.4).cgColor)
-                context.setLineWidth(2.5)
-                context.strokePath()
-
                 context.addPath(viewPath)
                 context.setStrokeColor(NSColor.controlAccentColor.cgColor)
                 context.setLineWidth(1)
                 context.strokePath()
                 context.restoreGState()
             }
+        }
+    }
+
+    private func drawPenPathInteraction() {
+        guard session.tool == .pen,
+              session.penDraft == nil,
+              let document = session.document,
+              let docToView = documentToView,
+              let context = NSGraphicsContext.current?.cgContext else { return }
+
+        // 1. If an active layer has a VectorModel and is visible, draw all its anchor points
+        let activeVectorLayer = session.activeLayer.flatMap { layer in
+            (layer.isVisible && layer.vector != nil && !(layer.vector?.subpaths.isEmpty ?? true)) ? layer : nil
+        }
+
+        if let activeLayer = activeVectorLayer, let vector = activeLayer.vector {
+            let layerToDoc = activeLayer.transform.layerToDocument
+            let layerToView = layerToDoc.concatenating(docToView)
+
+            context.saveGState()
 
             // 1b. Draw all anchor points on each subpath
             for (sIdx, subpath) in vector.subpaths.enumerated() {
